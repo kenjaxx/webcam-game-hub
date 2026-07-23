@@ -2,7 +2,7 @@ export default function GameMenu({ onSelectGame }) {
   const games = [
     { id: 'whackamole', name: '🔨 Whack-a-Mole', ready: true },
     { id: 'flappybird', name: '🐦 Flappy Bird', ready: true },
-    { id: 'fruitninja', name: '🍉 Fruit Ninja', ready: false },
+    { id: 'fruitninja', name: '🍉 Fruit Ninja', ready: true },
     { id: 'pong', name: '🏓 Pong', ready: false },
   ];
 
