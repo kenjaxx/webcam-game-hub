@@ -1,7 +1,7 @@
 export default function GameMenu({ onSelectGame }) {
   const games = [
     { id: 'whackamole', name: '🔨 Whack-a-Mole', ready: true },
-    { id: 'flappybird', name: '🐦 Flappy Bird', ready: false },
+    { id: 'flappybird', name: '🐦 Flappy Bird', ready: true },
     { id: 'fruitninja', name: '🍉 Fruit Ninja', ready: false },
     { id: 'pong', name: '🏓 Pong', ready: false },
   ];
@@ -10,15 +10,16 @@ export default function GameMenu({ onSelectGame }) {
     <div style={{ textAlign: 'center', padding: '2rem' }}>
       <h1>Webcam Game Hub</h1>
       <p>Control classic games using just your hand — no keyboard needed.</p>
-      <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginTop: '2rem' }}>
+      <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginTop: '2rem', flexWrap: 'wrap' }}>
         {games.map((game) => (
           <button
             key={game.id}
-            onClick={() => onSelectGame(game.id)}
+            onClick={() => game.ready && onSelectGame(game.id)}
+            disabled={!game.ready}
             style={{
               padding: '1rem 1.5rem',
               fontSize: '1rem',
-              cursor: 'pointer',
+              cursor: game.ready ? 'pointer' : 'not-allowed',
               opacity: game.ready ? 1 : 0.5,
             }}
           >
