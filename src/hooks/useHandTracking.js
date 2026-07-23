@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-// No more imports for Hands/Camera - they now come from window (loaded via CDN script tags)
+
+const GRACE_PERIOD_MS = 300; // keep last known position for 300ms after losing detection
 
 export function useHandTracking(videoRef) {
   const [handData, setHandData] = useState(null);
   const cameraRef = useRef(null);
+  const smoothedPos = useRef({ x: 0.5, y: 0.5 });
+  const isFirstDetection = useRef(true);
+  const lastValidData = useRef(null);
+  const lastSeenTime = useRef(0);
 
   useEffect(() => {
     if (!videoRef.current) return;
 
-    // Access MediaPipe classes from the global window object
     const hands = new window.Hands({
       locateFile: (file) =>
         `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
@@ -16,9 +20,9 @@ export function useHandTracking(videoRef) {
 
     hands.setOptions({
       maxNumHands: 1,
-      modelComplexity: 1,
-      minDetectionConfidence: 0.7,
-      minTrackingConfidence: 0.7,
+      modelComplexity: 0,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.5,
     });
 
     hands.onResults((results) => {
@@ -32,14 +36,43 @@ export function useHandTracking(videoRef) {
         );
         const isPinching = distance < 0.05;
 
-        setHandData({
-          x: indexTip.x,
-          y: indexTip.y,
+        const smoothingFactor = 0.35;
+
+        if (isFirstDetection.current) {
+          // First detection after hand appears - snap directly, no lag
+          smoothedPos.current.x = indexTip.x;
+          smoothedPos.current.y = indexTip.y;
+          isFirstDetection.current = false;
+        } else {
+          smoothedPos.current.x =
+            smoothedPos.current.x + (indexTip.x - smoothedPos.current.x) * smoothingFactor;
+          smoothedPos.current.y =
+            smoothedPos.current.y + (indexTip.y - smoothedPos.current.y) * smoothingFactor;
+        }
+
+        const newHandData = {
+          x: smoothedPos.current.x,
+          y: smoothedPos.current.y,
           isPinching,
           allLandmarks: landmarks,
-        });
+        };
+
+        setHandData(newHandData);
+
+        // Store this as the "last known good" position for grace-period fallback
+        lastValidData.current = newHandData;
+        lastSeenTime.current = Date.now();
       } else {
-        setHandData(null);
+        // No hand detected this frame - check if we're still within the grace period
+        const now = Date.now();
+        if (lastValidData.current && now - lastSeenTime.current < GRACE_PERIOD_MS) {
+          // Brief flicker - keep showing last known position instead of vanishing
+          setHandData(lastValidData.current);
+        } else {
+          // Real dropout - clear hand data and reset for next detection
+          setHandData(null);
+          isFirstDetection.current = true;
+        }
       }
     });
 
@@ -47,8 +80,8 @@ export function useHandTracking(videoRef) {
       onFrame: async () => {
         await hands.send({ image: videoRef.current });
       },
-      width: 640,
-      height: 480,
+      width: 480,
+      height: 360,
     });
 
     camera.start();

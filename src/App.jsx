@@ -1,25 +1,25 @@
 import { useState } from 'react';
 import GameMenu from './components/GameMenu';
-import WebcamFeed from './components/WebcamFeed';
+import WhackAMole from './games/WhackAMole/WhackAMole';
 
 function App() {
   const [selectedGame, setSelectedGame] = useState(null);
 
+  function renderGame() {
+    switch (selectedGame) {
+      case 'whackamole':
+        return <WhackAMole onExit={() => setSelectedGame(null)} />;
+      default:
+        return null;
+    }
+  }
+
   return (
-    <div style={{ fontFamily: 'sans-serif' }}>
+    <div style={{ fontFamily: 'sans-serif', textAlign: 'center', padding: '1rem' }}>
       {!selectedGame ? (
         <GameMenu onSelectGame={setSelectedGame} />
       ) : (
-        <div style={{ textAlign: 'center', padding: '1rem' }}>
-          <button onClick={() => setSelectedGame(null)}>← Back to Menu</button>
-          <WebcamFeed>
-            {(handData) => (
-              <div>
-                <p>Hand data: {handData ? `x:${handData.x.toFixed(2)}, y:${handData.y.toFixed(2)}, pinch:${handData.isPinching}` : 'No hand detected'}</p>
-              </div>
-            )}
-          </WebcamFeed>
-        </div>
+        renderGame()
       )}
     </div>
   );
