@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
-import WebcamFeed from '../../components/WebcamFeed';
+import { useRef, useState } from 'react';
 import ArcadeScreen from '../../components/ArcadeScreen';
+import GameHUD from '../../components/GameHUD';
+import HandTrackedCanvas from '../../components/HandTrackedCanvas';
+import { useCountdown } from '../../hooks/useCountdown';
+import { useFullscreen } from '../../hooks/useFullscreen';
+import { THEME, drawArcadeBackground } from '../../shared/theme';
 import {
-  FRUIT_RADIUS,
   STARTING_LIVES,
   SWIPE_SPEED_THRESHOLD,
   DIFFICULTY_SETTINGS,
@@ -16,34 +19,42 @@ import {
   playBombSound,
   playMissSound,
   playGameOverSound,
-  playCountdownBeep,
   setMuted,
+  getMuted,
 } from './sounds';
 import { getHighScore, saveHighScoreIfBetter } from './storage';
 
 const CANVAS_WIDTH = 480;
 const CANVAS_HEIGHT = 360;
 
+// fruit.color is always a well-formed "#rrggbb" string from logic.js, so this
+// no longer needs the unreachable fallback branch the old code had.
+function hexToRgbaTemplate(hex) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ALPHA)`;
+}
+
 export default function FruitNinja({ onExit }) {
   const canvasRef = useRef(null);
   const wrapperRef = useRef(null);
+  const [isFullscreen, toggleFullscreen] = useFullscreen(wrapperRef);
+  const [countdown, setCountdown] = useCountdown();
 
   const [difficulty, setDifficulty] = useState(null);
-  const [countdown, setCountdown] = useState(null);
   const [score, setScore] = useState(0);
   const [lives, setLives] = useState(STARTING_LIVES);
   const [gameOver, setGameOver] = useState(false);
   const [isNewHighScore, setIsNewHighScore] = useState(false);
   const [handDetected, setHandDetected] = useState(false);
-  const [muted, setMutedState] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [muted, setMutedState] = useState(getMuted());
 
   const fruits = useRef([]);
   const particles = useRef([]);
-  const trail = useRef([]); // recent fingertip positions, for drawing the "blade" trail
-  const lastFrameTime = useRef(null);
+  const trail = useRef([]);
   const lastSpawnTime = useRef(0);
-  const prevCursor = useRef(null); // previous frame's cursor position, for swipe speed calc
+  const prevCursor = useRef(null);
   const streak = useRef(0);
   const screenShake = useRef(0);
   const screenFlashRed = useRef(0);
@@ -55,38 +66,10 @@ export default function FruitNinja({ onExit }) {
   const gameActive = difficulty && countdown === null && !gameOver;
   gameActiveRef.current = gameActive;
 
-  useEffect(() => {
-    function handleFullscreenChange() {
-      setIsFullscreen(!!document.fullscreenElement);
-    }
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
-
-  function toggleFullscreen() {
-    if (!document.fullscreenElement) {
-      wrapperRef.current?.requestFullscreen?.();
-    } else {
-      document.exitFullscreen?.();
-    }
-  }
-
-  useEffect(() => {
-    if (countdown === null) return;
-    if (countdown === 0) {
-      const timeout = setTimeout(() => setCountdown(null), 500);
-      return () => clearTimeout(timeout);
-    }
-    playCountdownBeep();
-    const timeout = setTimeout(() => setCountdown((prev) => prev - 1), 800);
-    return () => clearTimeout(timeout);
-  }, [countdown]);
-
   function startNewRound(chosenDifficulty) {
     fruits.current = [];
     particles.current = [];
     trail.current = [];
-    lastFrameTime.current = null;
     lastSpawnTime.current = 0;
     prevCursor.current = null;
     streak.current = 0;
@@ -126,16 +109,14 @@ export default function FruitNinja({ onExit }) {
     setIsNewHighScore(isNew);
   }
 
-  function draw(handData) {
+  function draw(handData, deltaMs) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-
     setHandDetected(!!handData);
 
+    const dt = Math.min(deltaMs / 16.67, 3);
     const now = Date.now();
-    const dt = lastFrameTime.current ? Math.min((now - lastFrameTime.current) / 16.67, 3) : 1;
-    lastFrameTime.current = now;
 
     let cursorX = null;
     let cursorY = null;
@@ -149,30 +130,23 @@ export default function FruitNinja({ onExit }) {
         swipeSpeed = Math.hypot(cursorX - prevCursor.current.x, cursorY - prevCursor.current.y);
       }
       prevCursor.current = { x: cursorX, y: cursorY };
-
-      // Add to trail for the visual "blade" line
       trail.current.push({ x: cursorX, y: cursorY, time: now });
     } else {
       prevCursor.current = null;
     }
 
-    // Trim trail to last 200ms
     trail.current = trail.current.filter((p) => now - p.time < 200);
 
-    // --- UPDATE (only during active gameplay) ---
     if (gameActiveRef.current && !hasEndedRef.current) {
       const settings = DIFFICULTY_SETTINGS[difficulty];
 
-      // Spawn fruit on interval
       if (now - lastSpawnTime.current > settings.spawnRate) {
         fruits.current.push(createFruit(CANVAS_WIDTH, CANVAS_HEIGHT, settings));
         lastSpawnTime.current = now;
       }
 
-      // Update physics for each fruit
       fruits.current.forEach((fruit) => updateFruitPhysics(fruit, dt));
 
-      // Check slicing: fast swipe motion overlapping a fruit
       if (cursorX !== null && swipeSpeed > SWIPE_SPEED_THRESHOLD) {
         fruits.current.forEach((fruit) => {
           if (!fruit.sliced && isPointNearFruit(cursorX, cursorY, fruit)) {
@@ -194,16 +168,12 @@ export default function FruitNinja({ onExit }) {
               scoreRef.current += points;
               setScore(scoreRef.current);
               playSliceSound();
-              spawnParticles(fruit.x, fruit.y, fruit.color.replace(/^#/, '').match(/.{2}/g)
-                ? `rgba(${parseInt(fruit.color.slice(1,3),16)},${parseInt(fruit.color.slice(3,5),16)},${parseInt(fruit.color.slice(5,7),16)},ALPHA)`
-                : 'rgba(200,50,50,ALPHA)');
+              spawnParticles(fruit.x, fruit.y, hexToRgbaTemplate(fruit.color));
             }
           }
         });
       }
 
-      // Remove fruits that are off-screen (fell past bottom) - counts as a miss if not sliced/bomb
-      const beforeCount = fruits.current.length;
       fruits.current = fruits.current.filter((fruit) => {
         const offScreen = fruit.y - fruit.radius > CANVAS_HEIGHT + 20;
         if (offScreen && !fruit.sliced && !fruit.isBomb) {
@@ -218,14 +188,12 @@ export default function FruitNinja({ onExit }) {
         return !offScreen;
       });
 
-      // Clean up sliced fruits shortly after slicing (let particle burst play out)
-      fruits.current = fruits.current.filter((fruit) => !fruit.sliced || now - fruit.spawnTime < 50000);
+      // Sliced fruit is removed immediately - the particle burst plays out
+      // independently, so there's no need to keep the fruit itself around.
       fruits.current = fruits.current.filter((fruit) => !fruit.sliced);
     }
 
-    // --- DRAW ---
     ctx.save();
-
     if (screenShake.current > 0) {
       const shakeX = (Math.random() - 0.5) * screenShake.current;
       const shakeY = (Math.random() - 0.5) * screenShake.current;
@@ -233,11 +201,8 @@ export default function FruitNinja({ onExit }) {
       screenShake.current = Math.max(0, screenShake.current - 0.8);
     }
 
-    // Background
-    ctx.fillStyle = '#1a1a2e';
-    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    drawArcadeBackground(ctx, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // Fruits
     fruits.current.forEach((fruit) => {
       ctx.font = '40px sans-serif';
       ctx.textAlign = 'center';
@@ -245,7 +210,6 @@ export default function FruitNinja({ onExit }) {
       ctx.fillText(fruit.emoji, fruit.x, fruit.y);
     });
 
-    // Particles
     particles.current = particles.current.filter((p) => {
       const age = now - p.startTime;
       if (age > 500) return false;
@@ -257,27 +221,24 @@ export default function FruitNinja({ onExit }) {
       return true;
     });
 
-    // Blade trail (fading line following recent cursor positions)
     if (trail.current.length > 1) {
       ctx.beginPath();
       trail.current.forEach((p, i) => {
         if (i === 0) ctx.moveTo(p.x, p.y);
         else ctx.lineTo(p.x, p.y);
       });
-      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+      ctx.strokeStyle = THEME.cyan;
       ctx.lineWidth = 4;
       ctx.lineCap = 'round';
       ctx.stroke();
     }
 
-    // Red flash on bomb hit
     if (screenFlashRed.current > 0) {
       ctx.fillStyle = `rgba(255, 0, 0, ${screenFlashRed.current})`;
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
       screenFlashRed.current = Math.max(0, screenFlashRed.current - 0.04);
     }
 
-    // Cursor dot
     if (cursorX !== null && gameActiveRef.current) {
       ctx.beginPath();
       ctx.arc(cursorX, cursorY, 8, 0, Math.PI * 2);
@@ -285,12 +246,11 @@ export default function FruitNinja({ onExit }) {
       ctx.fill();
     }
 
-    // Countdown overlay
     if (countdown !== null) {
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillStyle = 'rgba(7,5,13,0.7)';
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      ctx.fillStyle = 'white';
-      ctx.font = 'bold 60px sans-serif';
+      ctx.fillStyle = THEME.text;
+      ctx.font = `bold 60px ${THEME.fontHeading}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(countdown === 0 ? 'GO!' : countdown, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
@@ -305,27 +265,6 @@ export default function FruitNinja({ onExit }) {
     setMutedState(newMuted);
   }
 
-  const wrapperStyle = {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '100%',
-    height: isFullscreen ? '100vh' : 'auto',
-    background: isFullscreen ? '#1a1a1a' : 'transparent',
-    padding: '1rem',
-    textAlign: 'center',
-    boxSizing: 'border-box',
-  };
-
-  const canvasContainerStyle = {
-    width: '100%',
-    maxWidth: isFullscreen ? '900px' : '480px',
-    aspectRatio: `${CANVAS_WIDTH} / ${CANVAS_HEIGHT}`,
-    margin: '0 auto',
-  };
-
-  // --- Screen 1: Difficulty Select ---
   if (!difficulty) {
     return (
       <ArcadeScreen eyebrow="Select Difficulty" title="Fruit Ninja 🍉">
@@ -345,7 +284,6 @@ export default function FruitNinja({ onExit }) {
     );
   }
 
-  // --- Screen 2: Game Over ---
   if (gameOver) {
     return (
       <ArcadeScreen eyebrow="Round Over" title="Game Over!">
@@ -363,51 +301,27 @@ export default function FruitNinja({ onExit }) {
     );
   }
 
-  // --- Screen 3: Active Game ---
   return (
-    <div ref={wrapperRef} style={wrapperStyle}>
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem' }}>
-        <h2 style={{ color: isFullscreen ? 'white' : 'inherit' }}>Fruit Ninja 🍉</h2>
-        <button onClick={toggleMute} style={{ fontSize: '1.2rem' }}>
-          {muted ? '🔇' : '🔊'}
-        </button>
-        <button onClick={toggleFullscreen} style={{ fontSize: '1.2rem' }}>
-          {isFullscreen ? '⤓' : '⤢'}
-        </button>
-      </div>
-      <p style={{ color: isFullscreen ? 'white' : 'inherit' }}>
-        Score: {score} | Lives: {'❤️'.repeat(lives)}{'🖤'.repeat(STARTING_LIVES - lives)} | Difficulty: {DIFFICULTY_SETTINGS[difficulty].label}
-      </p>
+    <div ref={wrapperRef} className={`game-wrapper${isFullscreen ? ' game-wrapper--fullscreen' : ''}`}>
+      <GameHUD
+        title="Fruit Ninja 🍉"
+        isFullscreen={isFullscreen}
+        muted={muted}
+        onToggleMute={toggleMute}
+        onToggleFullscreen={toggleFullscreen}
+        stats={`Score: ${score} | Lives: ${'❤️'.repeat(lives)}${'🖤'.repeat(STARTING_LIVES - lives)} | Difficulty: ${DIFFICULTY_SETTINGS[difficulty].label}`}
+        warning={!handDetected ? 'Hand not detected — move your hand into frame, with good lighting' : null}
+      />
 
-      {!handDetected && (
-        <p style={{ color: 'red', fontWeight: 'bold' }}>
-          ✋ Hand not detected — move your hand into frame, with good lighting
-        </p>
-      )}
+      <HandTrackedCanvas
+        canvasRef={canvasRef}
+        width={CANVAS_WIDTH}
+        height={CANVAS_HEIGHT}
+        isFullscreen={isFullscreen}
+        onFrame={draw}
+      />
 
-      <WebcamFeed>
-        {(handData) => {
-          draw(handData);
-          return (
-            <div style={canvasContainerStyle}>
-              <canvas
-                ref={canvasRef}
-                width={CANVAS_WIDTH}
-                height={CANVAS_HEIGHT}
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  display: 'block',
-                  border: '2px solid black',
-                  borderRadius: '8px',
-                }}
-              />
-            </div>
-          );
-        }}
-      </WebcamFeed>
-
-      <button onClick={onExit} style={{ marginTop: '1rem' }}>Quit Game</button>
+      <button className="ghost-btn" onClick={onExit} style={{ marginTop: '1rem' }}>Quit Game</button>
     </div>
   );
 }

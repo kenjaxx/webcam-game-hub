@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
-import WebcamFeed from '../../components/WebcamFeed';
+import { useRef, useState } from 'react';
 import ArcadeScreen from '../../components/ArcadeScreen';
+import GameHUD from '../../components/GameHUD';
+import HandTrackedCanvas from '../../components/HandTrackedCanvas';
+import { useCountdown } from '../../hooks/useCountdown';
+import { useFullscreen } from '../../hooks/useFullscreen';
+import { THEME, drawArcadeBackground } from '../../shared/theme';
 import {
   getHolePositions,
   getRandomHoleIndex,
@@ -10,21 +14,22 @@ import {
   GAME_DURATION,
   DIFFICULTY_SETTINGS,
 } from './logic';
-import { playWhackSound, playGameOverSound, playCountdownBeep, setMuted } from './sounds';
+import { playWhackSound, playGameOverSound, setMuted, getMuted } from './sounds';
 import { getHighScore, saveHighScoreIfBetter } from './storage';
 
-// Internal drawing resolution - stays fixed regardless of display size
 const CANVAS_WIDTH = 480;
 const CANVAS_HEIGHT = 360;
 
 export default function WhackAMole({ onExit }) {
   const canvasRef = useRef(null);
-  const wrapperRef = useRef(null); // used for fullscreen target
+  const wrapperRef = useRef(null);
+  const [isFullscreen, toggleFullscreen] = useFullscreen(wrapperRef);
+  const [countdown, setCountdown] = useCountdown();
+
   const [difficulty, setDifficulty] = useState(null);
-  const [countdown, setCountdown] = useState(null);
   const [activeMole, setActiveMole] = useState(null);
   const [moleIsGolden, setMoleIsGolden] = useState(false);
-  const [moleSpawnTime, setMoleSpawnTime] = useState(0); // for pop-in animation
+  const [moleSpawnTime, setMoleSpawnTime] = useState(0);
   const [score, setScore] = useState(0);
   const [streak, setStreak] = useState(0);
   const [bestStreak, setBestStreak] = useState(0);
@@ -32,87 +37,42 @@ export default function WhackAMole({ onExit }) {
   const [gameOver, setGameOver] = useState(false);
   const [isNewHighScore, setIsNewHighScore] = useState(false);
   const [handDetected, setHandDetected] = useState(false);
-  const [muted, setMutedState] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [muted, setMutedState] = useState(getMuted());
+
   const lastWhackTime = useRef(0);
   const lastPinchState = useRef(false);
   const hitAnimations = useRef([]);
   const particles = useRef([]);
-  const screenFlash = useRef(0); // opacity for golden mole flash effect
+  const screenFlash = useRef(0);
+  const lastSpawnTime = useRef(0);
+  const lastTimerTick = useRef(0);
+  const hasEndedRef = useRef(false);
+  const gameActiveRef = useRef(false);
+  const scoreRef = useRef(0);
+  const streakRef = useRef(0);
 
   const holes = getHolePositions(CANVAS_WIDTH, CANVAS_HEIGHT);
   const gameActive = difficulty && countdown === null && !gameOver;
+  gameActiveRef.current = gameActive;
 
-  // Track fullscreen state changes (e.g., user presses Esc)
-  useEffect(() => {
-    function handleFullscreenChange() {
-      setIsFullscreen(!!document.fullscreenElement);
-    }
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
-
-  function toggleFullscreen() {
-    if (!document.fullscreenElement) {
-      wrapperRef.current?.requestFullscreen?.();
-    } else {
-      document.exitFullscreen?.();
-    }
+  function startNewRound(chosenDifficulty) {
+    setActiveMole(null);
+    setScore(0);
+    setStreak(0);
+    setBestStreak(0);
+    setTimeLeft(GAME_DURATION);
+    setGameOver(false);
+    setIsNewHighScore(false);
+    hasEndedRef.current = false;
+    scoreRef.current = 0;
+    streakRef.current = 0;
+    lastSpawnTime.current = 0;
+    lastTimerTick.current = 0;
+    hitAnimations.current = [];
+    particles.current = [];
+    setDifficulty(chosenDifficulty);
+    setCountdown(3);
   }
-
-  // Countdown sequence
-  useEffect(() => {
-    if (countdown === null) return;
-
-    if (countdown === 0) {
-      const timeout = setTimeout(() => setCountdown(null), 500);
-      return () => clearTimeout(timeout);
-    }
-
-    playCountdownBeep();
-    const timeout = setTimeout(() => setCountdown((prev) => prev - 1), 800);
-    return () => clearTimeout(timeout);
-  }, [countdown]);
-
-  // Mole spawn loop
-  useEffect(() => {
-    if (!gameActive) return;
-
-    const spawnRate = DIFFICULTY_SETTINGS[difficulty].spawnRate;
-    const spawnInterval = setInterval(() => {
-      setActiveMole((prev) => getRandomHoleIndex(holes.length, prev));
-      setMoleIsGolden(isGoldenMole());
-      setMoleSpawnTime(Date.now());
-    }, spawnRate);
-
-    return () => clearInterval(spawnInterval);
-  }, [gameActive, difficulty, holes.length]);
-
-  // Countdown timer + high score save on game end
-  useEffect(() => {
-    if (!gameActive) return;
-
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          setGameOver(true);
-          playGameOverSound();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [gameActive]);
-
-  // When game ends, check/save high score
-  useEffect(() => {
-    if (gameOver && difficulty) {
-      const isNew = saveHighScoreIfBetter(difficulty, score);
-      setIsNewHighScore(isNew);
-    }
-  }, [gameOver]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function spawnParticles(x, y, color) {
     for (let i = 0; i < 12; i++) {
@@ -128,31 +88,64 @@ export default function WhackAMole({ onExit }) {
     }
   }
 
+  function endGame() {
+    if (hasEndedRef.current) return;
+    hasEndedRef.current = true;
+    playGameOverSound();
+    setGameOver(true);
+    const isNew = saveHighScoreIfBetter(difficulty, scoreRef.current);
+    setIsNewHighScore(isNew);
+  }
+
+  // Called every animation frame via HandTrackedCanvas. Mole spawning and the
+  // round timer live here too now, driven by one clock instead of separate
+  // setInterval timers running alongside the old MediaPipe-rate draw calls.
   function draw(handData) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    const now = Date.now();
 
     setHandDetected(!!handData);
 
-    // Draw holes + mole with pop-in scale animation
+    if (gameActiveRef.current) {
+      const spawnRate = DIFFICULTY_SETTINGS[difficulty].spawnRate;
+      if (now - lastSpawnTime.current > spawnRate) {
+        setActiveMole((prev) => getRandomHoleIndex(holes.length, prev));
+        setMoleIsGolden(isGoldenMole());
+        setMoleSpawnTime(now);
+        lastSpawnTime.current = now;
+      }
+      if (now - lastTimerTick.current > 1000) {
+        lastTimerTick.current = now;
+        setTimeLeft((prev) => {
+          if (prev <= 1) {
+            endGame();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }
+    }
+
+    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    drawArcadeBackground(ctx, CANVAS_WIDTH, CANVAS_HEIGHT);
+
     holes.forEach((hole, index) => {
       ctx.beginPath();
       ctx.arc(hole.x, hole.y, 45, 0, Math.PI * 2);
-      ctx.fillStyle = '#4a2c17';
+      ctx.fillStyle = '#2a1f3d';
       ctx.fill();
 
       ctx.beginPath();
       ctx.arc(hole.x, hole.y, 38, 0, Math.PI * 2);
-      ctx.fillStyle = index === activeMole ? (moleIsGolden ? '#c9a227' : '#6b4226') : '#2e1a0f';
+      ctx.fillStyle = index === activeMole ? (moleIsGolden ? THEME.gold : THEME.accent) : '#160f24';
       ctx.fill();
 
-      if (index === activeMole && gameActive) {
-        // Pop-in animation: mole scales up from 0 to full size over 150ms
-        const age = Date.now() - moleSpawnTime;
+      if (index === activeMole && gameActiveRef.current) {
+        const age = now - moleSpawnTime;
         const scale = Math.min(age / 150, 1);
-        const easedScale = 1 - Math.pow(1 - scale, 3); // ease-out cubic
+        const easedScale = 1 - Math.pow(1 - scale, 3);
 
         ctx.save();
         ctx.translate(hole.x, hole.y);
@@ -165,9 +158,8 @@ export default function WhackAMole({ onExit }) {
       }
     });
 
-    // Particles
     particles.current = particles.current.filter((p) => {
-      const age = Date.now() - p.startTime;
+      const age = now - p.startTime;
       if (age > 500) return false;
       const progress = age / 500;
       const px = p.x + p.vx * age * 0.05;
@@ -177,98 +169,95 @@ export default function WhackAMole({ onExit }) {
       return true;
     });
 
-    // Hit/miss floating text
     hitAnimations.current = hitAnimations.current.filter((anim) => {
-      const age = Date.now() - anim.startTime;
+      const age = now - anim.startTime;
       if (age > 600) return false;
       const progress = age / 600;
-      ctx.font = 'bold 22px sans-serif';
+      ctx.font = `bold 22px ${THEME.fontHeading}`;
       ctx.fillStyle = anim.color.replace('ALPHA', 1 - progress);
       ctx.textAlign = 'center';
       ctx.fillText(anim.text, anim.x, anim.y - progress * 30);
       return true;
     });
 
-    // Golden mole screen flash
     if (screenFlash.current > 0) {
-      ctx.fillStyle = `rgba(255, 215, 0, ${screenFlash.current})`;
+      ctx.fillStyle = `rgba(255, 187, 61, ${screenFlash.current})`;
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
       screenFlash.current = Math.max(0, screenFlash.current - 0.05);
     }
 
-    // Timer bar
-    if (gameActive) {
+    if (gameActiveRef.current) {
       const timerBarWidth = (timeLeft / GAME_DURATION) * CANVAS_WIDTH;
-      ctx.fillStyle = timeLeft <= 5 ? '#ff4444' : '#4CAF50';
+      ctx.fillStyle = timeLeft <= 5 ? THEME.danger : THEME.cyan;
       ctx.fillRect(0, 0, timerBarWidth, 6);
     }
 
-    // Countdown overlay
     if (countdown !== null) {
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillStyle = 'rgba(7,5,13,0.7)';
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      ctx.fillStyle = 'white';
-      ctx.font = 'bold 60px sans-serif';
+      ctx.fillStyle = THEME.text;
+      ctx.font = `bold 60px ${THEME.fontHeading}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(countdown === 0 ? 'GO!' : countdown, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
     }
 
-    // Fingertip cursor + hit detection
     if (handData) {
       const cursorX = (1 - handData.x) * CANVAS_WIDTH;
       const cursorY = handData.y * CANVAS_HEIGHT;
 
       ctx.beginPath();
       ctx.arc(cursorX, cursorY, 14, 0, Math.PI * 2);
-      ctx.fillStyle = handData.isPinching ? '#ff4444' : '#ffeb3b';
+      ctx.fillStyle = handData.isPinching ? THEME.danger : THEME.gold;
       ctx.fill();
       ctx.lineWidth = 2;
-      ctx.strokeStyle = 'black';
+      ctx.strokeStyle = '#160f24';
       ctx.stroke();
 
       const justPinched = handData.isPinching && !lastPinchState.current;
       lastPinchState.current = handData.isPinching;
 
-      if (justPinched && gameActive) {
-        const now = Date.now();
+      if (justPinched && gameActiveRef.current) {
         if (
           activeMole !== null &&
           isWithinHole(cursorX, cursorY, holes[activeMole].x, holes[activeMole].y) &&
           now - lastWhackTime.current > 300
         ) {
-          const newStreak = streak + 1;
+          const newStreak = streakRef.current + 1;
+          streakRef.current = newStreak;
           const multiplier = getComboMultiplier(newStreak);
           const points = (moleIsGolden ? 3 : 1) * multiplier;
 
-          setScore((prev) => prev + points);
+          scoreRef.current += points;
+          setScore(scoreRef.current);
           setStreak(newStreak);
           setBestStreak((prev) => Math.max(prev, newStreak));
 
           hitAnimations.current.push({
             x: holes[activeMole].x,
             y: holes[activeMole].y,
-            startTime: Date.now(),
+            startTime: now,
             text: `+${points}${multiplier > 1 ? ` (${multiplier}x!)` : ''}`,
-            color: moleIsGolden ? 'rgba(255, 215, 0, ALPHA)' : 'rgba(100, 255, 100, ALPHA)',
+            color: moleIsGolden ? 'rgba(255, 187, 61, ALPHA)' : 'rgba(100, 255, 100, ALPHA)',
           });
           spawnParticles(
             holes[activeMole].x,
             holes[activeMole].y,
-            moleIsGolden ? 'rgba(255, 215, 0, ALPHA)' : 'rgba(100, 220, 100, ALPHA)'
+            moleIsGolden ? 'rgba(255, 187, 61, ALPHA)' : 'rgba(100, 220, 100, ALPHA)'
           );
           if (moleIsGolden) screenFlash.current = 0.4;
           playWhackSound();
           setActiveMole(null);
           lastWhackTime.current = now;
         } else {
+          streakRef.current = 0;
           setStreak(0);
           hitAnimations.current.push({
             x: cursorX,
             y: cursorY,
-            startTime: Date.now(),
+            startTime: now,
             text: 'Miss',
-            color: 'rgba(255, 100, 100, ALPHA)',
+            color: 'rgba(255, 107, 107, ALPHA)',
           });
         }
       }
@@ -283,43 +272,13 @@ export default function WhackAMole({ onExit }) {
     setMutedState(newMuted);
   }
 
-  // Shared fullscreen wrapper styling
-  const wrapperStyle = {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '100%',
-    height: isFullscreen ? '100vh' : 'auto',
-    background: isFullscreen ? '#1a1a1a' : 'transparent',
-    padding: '1rem',
-    textAlign: 'center',
-    boxSizing: 'border-box',
-  };
-
-  // Responsive canvas container - maintains 4:3 aspect ratio, scales to fit viewport
-  const canvasContainerStyle = {
-    width: '100%',
-    maxWidth: isFullscreen ? '900px' : '480px',
-    aspectRatio: `${CANVAS_WIDTH} / ${CANVAS_HEIGHT}`,
-    margin: '0 auto',
-  };
-
-  // --- Screen 1: Difficulty Select ---
   if (!difficulty) {
     return (
       <ArcadeScreen eyebrow="Select Difficulty" title="Whack-a-Mole 🐹">
         <p className="stat-line--muted">Pinch to whack moles as they pop up. Golden moles are worth 3x!</p>
         <div className="difficulty-grid">
           {Object.entries(DIFFICULTY_SETTINGS).map(([key, setting]) => (
-            <button
-              key={key}
-              className="difficulty-card"
-              onClick={() => {
-                setDifficulty(key);
-                setCountdown(3);
-              }}
-            >
+            <button key={key} className="difficulty-card" onClick={() => startNewRound(key)}>
               <span className="difficulty-card__label">{setting.label}</span>
               <span className="difficulty-card__best">Best {getHighScore(key)}</span>
             </button>
@@ -332,7 +291,6 @@ export default function WhackAMole({ onExit }) {
     );
   }
 
-  // --- Screen 2: Game Over ---
   if (gameOver) {
     return (
       <ArcadeScreen eyebrow="Round Over" title="Game Over!">
@@ -343,77 +301,37 @@ export default function WhackAMole({ onExit }) {
           Difficulty: {DIFFICULTY_SETTINGS[difficulty].label} · High Score: {getHighScore(difficulty)}
         </p>
         <div className="ghost-btn-row">
-          <button
-            className="ghost-btn"
-            onClick={() => {
-              setDifficulty(null);
-              setScore(0);
-              setStreak(0);
-              setBestStreak(0);
-              setTimeLeft(GAME_DURATION);
-              setGameOver(false);
-              setIsNewHighScore(false);
-            }}
-          >
-            Play Again
-          </button>
+          <button className="ghost-btn" onClick={() => startNewRound(difficulty)}>Play Again</button>
+          <button className="ghost-btn" onClick={() => setDifficulty(null)}>Change Difficulty</button>
           <button className="ghost-btn" onClick={onExit}>Back to Menu</button>
         </div>
       </ArcadeScreen>
     );
   }
 
-  // --- Screen 3: Active Game ---
   const multiplier = getComboMultiplier(streak);
 
   return (
-    <div ref={wrapperRef} style={wrapperStyle}>
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem' }}>
-        <h2 style={{ color: isFullscreen ? 'white' : 'inherit' }}>Whack-a-Mole 🐹</h2>
-        <button onClick={toggleMute} style={{ fontSize: '1.2rem' }}>
-          {muted ? '🔇' : '🔊'}
-        </button>
-        <button onClick={toggleFullscreen} style={{ fontSize: '1.2rem' }}>
-          {isFullscreen ? '⤓' : '⤢'}
-        </button>
-      </div>
-      <p style={{ color: isFullscreen ? 'white' : 'inherit' }}>
-        Score: {score} | Streak: {streak} {multiplier > 1 && `(${multiplier}x combo!)`} | Time: {timeLeft}s
-      </p>
-      <p style={{ fontSize: '0.85rem', color: isFullscreen ? '#aaa' : '#666' }}>
-        Pinch to whack! ✨ Golden moles are worth 3x. Missing breaks your combo.
-      </p>
+    <div ref={wrapperRef} className={`game-wrapper${isFullscreen ? ' game-wrapper--fullscreen' : ''}`}>
+      <GameHUD
+        title="Whack-a-Mole 🐹"
+        isFullscreen={isFullscreen}
+        muted={muted}
+        onToggleMute={toggleMute}
+        onToggleFullscreen={toggleFullscreen}
+        stats={`Score: ${score} | Streak: ${streak}${multiplier > 1 ? ` (${multiplier}x combo!)` : ''} | Time: ${timeLeft}s`}
+        warning={!handDetected ? 'Hand not detected — move your hand into frame, with good lighting' : null}
+      />
 
-      {!handDetected && (
-        <p style={{ color: 'red', fontWeight: 'bold' }}>
-          ✋ Hand not detected — move your hand into frame, with good lighting
-        </p>
-      )}
+      <HandTrackedCanvas
+        canvasRef={canvasRef}
+        width={CANVAS_WIDTH}
+        height={CANVAS_HEIGHT}
+        isFullscreen={isFullscreen}
+        onFrame={draw}
+      />
 
-      <WebcamFeed>
-        {(handData) => {
-          draw(handData);
-          return (
-            <div style={canvasContainerStyle}>
-              <canvas
-                ref={canvasRef}
-                width={CANVAS_WIDTH}
-                height={CANVAS_HEIGHT}
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  display: 'block',
-                  border: '2px solid black',
-                  background: '#4CAF50',
-                  borderRadius: '8px',
-                }}
-              />
-            </div>
-          );
-        }}
-      </WebcamFeed>
-
-      <button onClick={onExit} style={{ marginTop: '1rem' }}>Quit Game</button>
+      <button className="ghost-btn" onClick={onExit} style={{ marginTop: '1rem' }}>Quit Game</button>
     </div>
   );
 }

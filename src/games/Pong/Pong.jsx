@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
-import WebcamFeed from '../../components/WebcamFeed';
+import { useRef, useState } from 'react';
 import ArcadeScreen from '../../components/ArcadeScreen';
+import GameHUD from '../../components/GameHUD';
+import HandTrackedCanvas from '../../components/HandTrackedCanvas';
+import { useCountdown } from '../../hooks/useCountdown';
+import { useFullscreen } from '../../hooks/useFullscreen';
+import { THEME, drawArcadeBackground } from '../../shared/theme';
 import {
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
@@ -23,32 +27,30 @@ import {
   playScoreSound,
   playMissSound,
   playGameOverSound,
-  playCountdownBeep,
   setMuted,
+  getMuted,
 } from './sounds';
 import { getHighScore, saveHighScoreIfBetter } from './storage';
 
 export default function Pong({ onExit }) {
   const canvasRef = useRef(null);
   const wrapperRef = useRef(null);
+  const [isFullscreen, toggleFullscreen] = useFullscreen(wrapperRef);
+  const [countdown, setCountdown] = useCountdown();
 
   const [difficulty, setDifficulty] = useState(null);
-  const [countdown, setCountdown] = useState(null);
   const [score, setScore] = useState(0);
   const [lives, setLives] = useState(STARTING_LIVES);
   const [gameOver, setGameOver] = useState(false);
   const [isNewHighScore, setIsNewHighScore] = useState(false);
   const [handDetected, setHandDetected] = useState(false);
-  const [muted, setMutedState] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [pointFlash, setPointFlash] = useState(null); // 'player' | 'ai' | null, for the brief serve pause
+  const [muted, setMutedState] = useState(getMuted());
+  const [pointFlash, setPointFlash] = useState(null);
 
-  // Fast-changing game state lives in refs to avoid re-render churn every frame
   const ball = useRef(null);
   const playerPaddleY = useRef(CANVAS_HEIGHT / 2);
   const aiPaddleY = useRef(CANVAS_HEIGHT / 2);
   const particles = useRef([]);
-  const lastFrameTime = useRef(null);
   const screenShake = useRef(0);
   const gameActiveRef = useRef(false);
   const scoreRef = useRef(0);
@@ -59,43 +61,12 @@ export default function Pong({ onExit }) {
   const gameActive = difficulty && countdown === null && !gameOver;
   gameActiveRef.current = gameActive;
 
-  useEffect(() => {
-    function handleFullscreenChange() {
-      setIsFullscreen(!!document.fullscreenElement);
-    }
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
-
-  function toggleFullscreen() {
-    if (!document.fullscreenElement) {
-      wrapperRef.current?.requestFullscreen?.();
-    } else {
-      document.exitFullscreen?.();
-    }
-  }
-
-  // Countdown sequence
-  useEffect(() => {
-    if (countdown === null) return;
-
-    if (countdown === 0) {
-      const timeout = setTimeout(() => setCountdown(null), 500);
-      return () => clearTimeout(timeout);
-    }
-
-    playCountdownBeep();
-    const timeout = setTimeout(() => setCountdown((prev) => prev - 1), 800);
-    return () => clearTimeout(timeout);
-  }, [countdown]);
-
   function startNewRound(chosenDifficulty) {
     const settings = DIFFICULTY_SETTINGS[chosenDifficulty];
     ball.current = createBall(settings.ballSpeed);
     playerPaddleY.current = CANVAS_HEIGHT / 2;
     aiPaddleY.current = CANVAS_HEIGHT / 2;
     particles.current = [];
-    lastFrameTime.current = null;
     screenShake.current = 0;
     scoreRef.current = 0;
     livesRef.current = STARTING_LIVES;
@@ -133,7 +104,6 @@ export default function Pong({ onExit }) {
     setIsNewHighScore(isNew);
   }
 
-  // Handles a point being scored, resets the ball, and gives a brief on-screen flash
   function handlePoint(scorer) {
     const settings = DIFFICULTY_SETTINGS[difficulty];
 
@@ -141,13 +111,13 @@ export default function Pong({ onExit }) {
       scoreRef.current += 1;
       setScore(scoreRef.current);
       playScoreSound();
-      spawnParticles(CANVAS_WIDTH - BALL_RADIUS - 4, ball.current.y, 'rgba(100, 220, 100, ALPHA)');
+      spawnParticles(CANVAS_WIDTH - BALL_RADIUS - 4, ball.current.y, 'rgba(77, 208, 165, ALPHA)');
     } else {
       livesRef.current = Math.max(0, livesRef.current - 1);
       setLives(livesRef.current);
       playMissSound();
       screenShake.current = 10;
-      spawnParticles(BALL_RADIUS + 4, ball.current.y, 'rgba(255, 100, 100, ALPHA)');
+      spawnParticles(BALL_RADIUS + 4, ball.current.y, 'rgba(255, 107, 107, ALPHA)');
     }
 
     setPointFlash(scorer);
@@ -158,23 +128,19 @@ export default function Pong({ onExit }) {
       return;
     }
 
-    // Serve toward whoever just lost the point
     ball.current = createBall(settings.ballSpeed, scorer === 'player' ? false : true);
     servePauseUntil.current = Date.now() + 500;
   }
 
-  function draw(handData) {
+  function draw(handData, deltaMs) {
     const canvas = canvasRef.current;
     if (!canvas || !ball.current) return;
     const ctx = canvas.getContext('2d');
-
     setHandDetected(!!handData);
 
+    const dt = Math.min(deltaMs / 16.67, 3);
     const now = Date.now();
-    const dt = lastFrameTime.current ? Math.min((now - lastFrameTime.current) / 16.67, 3) : 1;
-    lastFrameTime.current = now;
 
-    // --- UPDATE ---
     if (handData) {
       const targetY = handData.y * CANVAS_HEIGHT;
       playerPaddleY.current += (targetY - playerPaddleY.current) * 0.35;
@@ -204,7 +170,6 @@ export default function Pong({ onExit }) {
         spawnParticles(ball.current.x, ball.current.y, 'rgba(255,255,255,ALPHA)', 8);
       }
 
-      // Off-screen left = AI scored, off-screen right = player scored
       if (ball.current.x + BALL_RADIUS < 0) {
         handlePoint('ai');
       } else if (ball.current.x - BALL_RADIUS > CANVAS_WIDTH) {
@@ -212,9 +177,7 @@ export default function Pong({ onExit }) {
       }
     }
 
-    // --- DRAW ---
     ctx.save();
-
     if (screenShake.current > 0) {
       const shakeX = (Math.random() - 0.5) * screenShake.current;
       const shakeY = (Math.random() - 0.5) * screenShake.current;
@@ -222,13 +185,10 @@ export default function Pong({ onExit }) {
       screenShake.current = Math.max(0, screenShake.current - 0.6);
     }
 
-    // Court background
-    ctx.fillStyle = '#0f1420';
-    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    drawArcadeBackground(ctx, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // Center dashed line
     ctx.setLineDash([8, 10]);
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(CANVAS_WIDTH / 2, 0);
@@ -236,21 +196,18 @@ export default function Pong({ onExit }) {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Player paddle (mint) and AI paddle (coral)
-    ctx.fillStyle = '#4dd0a5';
+    ctx.fillStyle = THEME.success;
     ctx.fillRect(PLAYER_X, playerPaddleY.current - PADDLE_HEIGHT / 2, PADDLE_WIDTH, PADDLE_HEIGHT);
-    ctx.fillStyle = '#ff6b6b';
+    ctx.fillStyle = THEME.danger;
     ctx.fillRect(AI_X, aiPaddleY.current - PADDLE_HEIGHT / 2, PADDLE_WIDTH, PADDLE_HEIGHT);
 
-    // Ball
     if (now >= servePauseUntil.current || countdown !== null) {
       ctx.beginPath();
       ctx.arc(ball.current.x, ball.current.y, BALL_RADIUS, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffeb3b';
+      ctx.fillStyle = THEME.gold;
       ctx.fill();
     }
 
-    // Particles
     particles.current = particles.current.filter((p) => {
       const age = now - p.startTime;
       if (age > 500) return false;
@@ -262,19 +219,16 @@ export default function Pong({ onExit }) {
       return true;
     });
 
-    // Point-scored flash
     if (pointFlash) {
-      ctx.fillStyle =
-        pointFlash === 'player' ? 'rgba(77, 208, 165, 0.15)' : 'rgba(255, 107, 107, 0.15)';
+      ctx.fillStyle = pointFlash === 'player' ? 'rgba(77, 208, 165, 0.15)' : 'rgba(255, 107, 107, 0.15)';
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     }
 
-    // Countdown overlay
     if (countdown !== null) {
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillStyle = 'rgba(7,5,13,0.7)';
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      ctx.fillStyle = 'white';
-      ctx.font = 'bold 60px sans-serif';
+      ctx.fillStyle = THEME.text;
+      ctx.font = `bold 60px ${THEME.fontHeading}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(countdown === 0 ? 'GO!' : countdown, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
@@ -289,27 +243,6 @@ export default function Pong({ onExit }) {
     setMutedState(newMuted);
   }
 
-  const wrapperStyle = {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '100%',
-    height: isFullscreen ? '100vh' : 'auto',
-    background: isFullscreen ? '#1a1a1a' : 'transparent',
-    padding: '1rem',
-    textAlign: 'center',
-    boxSizing: 'border-box',
-  };
-
-  const canvasContainerStyle = {
-    width: '100%',
-    maxWidth: isFullscreen ? '900px' : '480px',
-    aspectRatio: `${CANVAS_WIDTH} / ${CANVAS_HEIGHT}`,
-    margin: '0 auto',
-  };
-
-  // --- Screen 1: Difficulty Select ---
   if (!difficulty) {
     return (
       <ArcadeScreen eyebrow="Select Difficulty" title="Pong 🏓">
@@ -331,7 +264,6 @@ export default function Pong({ onExit }) {
     );
   }
 
-  // --- Screen 2: Game Over ---
   if (gameOver) {
     return (
       <ArcadeScreen eyebrow="Round Over" title="Game Over!">
@@ -349,51 +281,27 @@ export default function Pong({ onExit }) {
     );
   }
 
-  // --- Screen 3: Active Game ---
   return (
-    <div ref={wrapperRef} style={wrapperStyle}>
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem' }}>
-        <h2 style={{ color: isFullscreen ? 'white' : 'inherit' }}>Pong 🏓</h2>
-        <button onClick={toggleMute} style={{ fontSize: '1.2rem' }}>
-          {muted ? '🔇' : '🔊'}
-        </button>
-        <button onClick={toggleFullscreen} style={{ fontSize: '1.2rem' }}>
-          {isFullscreen ? '⤓' : '⤢'}
-        </button>
-      </div>
-      <p style={{ color: isFullscreen ? 'white' : 'inherit' }}>
-        Score: {score} | Lives: {'❤️'.repeat(lives)}{'🖤'.repeat(STARTING_LIVES - lives)} | Difficulty: {DIFFICULTY_SETTINGS[difficulty].label}
-      </p>
+    <div ref={wrapperRef} className={`game-wrapper${isFullscreen ? ' game-wrapper--fullscreen' : ''}`}>
+      <GameHUD
+        title="Pong 🏓"
+        isFullscreen={isFullscreen}
+        muted={muted}
+        onToggleMute={toggleMute}
+        onToggleFullscreen={toggleFullscreen}
+        stats={`Score: ${score} | Lives: ${'❤️'.repeat(lives)}${'🖤'.repeat(STARTING_LIVES - lives)} | Difficulty: ${DIFFICULTY_SETTINGS[difficulty].label}`}
+        warning={!handDetected ? 'Hand not detected — move your hand into frame, with good lighting' : null}
+      />
 
-      {!handDetected && (
-        <p style={{ color: 'red', fontWeight: 'bold' }}>
-          ✋ Hand not detected — move your hand into frame, with good lighting
-        </p>
-      )}
+      <HandTrackedCanvas
+        canvasRef={canvasRef}
+        width={CANVAS_WIDTH}
+        height={CANVAS_HEIGHT}
+        isFullscreen={isFullscreen}
+        onFrame={draw}
+      />
 
-      <WebcamFeed>
-        {(handData) => {
-          draw(handData);
-          return (
-            <div style={canvasContainerStyle}>
-              <canvas
-                ref={canvasRef}
-                width={CANVAS_WIDTH}
-                height={CANVAS_HEIGHT}
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  display: 'block',
-                  border: '2px solid black',
-                  borderRadius: '8px',
-                }}
-              />
-            </div>
-          );
-        }}
-      </WebcamFeed>
-
-      <button onClick={onExit} style={{ marginTop: '1rem' }}>Quit Game</button>
+      <button className="ghost-btn" onClick={onExit} style={{ marginTop: '1rem' }}>Quit Game</button>
     </div>
   );
 }
