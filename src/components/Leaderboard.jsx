@@ -4,12 +4,24 @@ import './Leaderboard.css';
 export default function Leaderboard({ topScores, loading, onSubmit, isNewHighScore }) {
   const [name, setName] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState(null);
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!name.trim()) return;
-    await onSubmit(name.trim());
-    setSubmitted(true);
+    if (!name.trim() || isSubmitting || submitted) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      const success = await onSubmit(name.trim());
+      if (success) {
+        setSubmitted(true);
+      } else {
+        setError('Could not submit your score. Please try again.');
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -23,11 +35,16 @@ export default function Leaderboard({ topScores, loading, onSubmit, isNewHighSco
             placeholder="Your name"
             value={name}
             maxLength={20}
+            disabled={isSubmitting}
             onChange={(e) => setName(e.target.value)}
           />
-          <button className="ghost-btn" type="submit">Submit Score</button>
+          <button className="ghost-btn" type="submit" disabled={isSubmitting || !name.trim()}>
+            {isSubmitting ? 'Submitting…' : 'Submit Score'}
+          </button>
         </form>
       )}
+
+      {error && <p className="stat-line--muted">{error}</p>}
 
       {loading ? (
         <p className="stat-line--muted">Loading scores…</p>

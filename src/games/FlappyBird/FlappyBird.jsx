@@ -47,9 +47,7 @@ export default function FlappyBird({ onExit }) {
   const gameActiveRef = useRef(false);
   const scoreRef = useRef(0);
   const hasCollidedRef = useRef(false);
-
-  const openPalmHeldSince = useRef(null);
-const [isPaused, setIsPaused] = useState(false);
+  const roundStartTimeRef = useRef(0);
 
   const gameActive = difficulty && countdown === null && !gameOver;
   gameActiveRef.current = gameActive;
@@ -62,6 +60,7 @@ const [isPaused, setIsPaused] = useState(false);
     screenShake.current = 0;
     scoreRef.current = 0;
     hasCollidedRef.current = false;
+    roundStartTimeRef.current = Date.now();
     setScore(0);
     setGameOver(false);
     setIsNewHighScore(false);
@@ -83,9 +82,6 @@ const [isPaused, setIsPaused] = useState(false);
     }
   }
 
-
-  
-
   function triggerGameOver() {
     if (hasCollidedRef.current) return;
     hasCollidedRef.current = true;
@@ -98,30 +94,18 @@ const [isPaused, setIsPaused] = useState(false);
       setGameOver(true);
       const isNew = saveHighScoreIfBetter(difficulty, scoreRef.current);
       setIsNewHighScore(isNew);
+      endGameStatsLog(roundStartTimeRef.current);
     }, 300);
   }
 
   function endGameStatsLog(roundStartTime) {
-  const totalAttempts = attemptsRef.current;
-  const hits = hitsRef.current;
-
-  logSession('whackamole', {
-    score: scoreRef.current,
-    difficulty,
-    accuracy: totalAttempts > 0 ? hits / totalAttempts : 0,
-    durationSec: Math.round((Date.now() - roundStartTime) / 1000),
-  });
-}
-
-if (handData?.gesture === 'open_palm' && gameActiveRef.current) {
-  if (!openPalmHeldSince.current) openPalmHeldSince.current = now;
-  if (now - openPalmHeldSince.current > 800) {
-    setIsPaused((p) => !p);
-    openPalmHeldSince.current = null;
+    logSession('flappybird', {
+      score: scoreRef.current,
+      difficulty,
+      accuracy: null,
+      durationSec: Math.round((Date.now() - roundStartTime) / 1000),
+    });
   }
-} else {
-  openPalmHeldSince.current = null;
-}
 
   function draw(handData, deltaMs) {
     const canvas = canvasRef.current;
@@ -288,13 +272,12 @@ if (handData?.gesture === 'open_palm' && gameActiveRef.current) {
           <button className="ghost-btn" onClick={() => setDifficulty(null)}>Change Difficulty</button>
           <button className="ghost-btn" onClick={onExit}>Back to Menu</button>
           <Leaderboard
-  topScores={topScores}
-  loading={loading}
-  isNewHighScore={isNewHighScore}
-  onSubmit={(name) => submitScore(name, score, difficulty)}
-/>
+            topScores={topScores}
+            loading={loading}
+            isNewHighScore={isNewHighScore}
+            onSubmit={(name) => submitScore(name, score, difficulty)}
+          />
         </div>
-        
       </ArcadeScreen>
     );
   }

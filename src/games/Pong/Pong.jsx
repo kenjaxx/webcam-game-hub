@@ -60,9 +60,8 @@ export default function Pong({ onExit }) {
   const livesRef = useRef(STARTING_LIVES);
   const hasEndedRef = useRef(false);
   const servePauseUntil = useRef(0);
+  const roundStartTimeRef = useRef(0);
   const { topScores, loading, submitScore } = useLeaderboard('pong');
-  const openPalmHeldSince = useRef(null);
-const [isPaused, setIsPaused] = useState(false);
 
   const gameActive = difficulty && countdown === null && !gameOver;
   gameActiveRef.current = gameActive;
@@ -78,6 +77,7 @@ const [isPaused, setIsPaused] = useState(false);
     livesRef.current = STARTING_LIVES;
     hasEndedRef.current = false;
     servePauseUntil.current = 0;
+    roundStartTimeRef.current = Date.now();
     setScore(0);
     setLives(STARTING_LIVES);
     setGameOver(false);
@@ -101,16 +101,6 @@ const [isPaused, setIsPaused] = useState(false);
     }
   }
 
-  if (handData?.gesture === 'open_palm' && gameActiveRef.current) {
-  if (!openPalmHeldSince.current) openPalmHeldSince.current = now;
-  if (now - openPalmHeldSince.current > 800) {
-    setIsPaused((p) => !p);
-    openPalmHeldSince.current = null;
-  }
-} else {
-  openPalmHeldSince.current = null;
-}
-
   function endGame() {
     if (hasEndedRef.current) return;
     hasEndedRef.current = true;
@@ -118,20 +108,17 @@ const [isPaused, setIsPaused] = useState(false);
     setGameOver(true);
     const isNew = saveHighScoreIfBetter(difficulty, scoreRef.current);
     setIsNewHighScore(isNew);
+    endGameStatsLog(roundStartTimeRef.current);
   }
 
-
   function endGameStatsLog(roundStartTime) {
-  const totalAttempts = attemptsRef.current;
-  const hits = hitsRef.current;
-
-  logSession('whackamole', {
-    score: scoreRef.current,
-    difficulty,
-    accuracy: totalAttempts > 0 ? hits / totalAttempts : 0,
-    durationSec: Math.round((Date.now() - roundStartTime) / 1000),
-  });
-}
+    logSession('pong', {
+      score: scoreRef.current,
+      difficulty,
+      accuracy: null,
+      durationSec: Math.round((Date.now() - roundStartTime) / 1000),
+    });
+  }
 
   function handlePoint(scorer) {
     const settings = DIFFICULTY_SETTINGS[difficulty];
@@ -289,11 +276,11 @@ const [isPaused, setIsPaused] = useState(false);
         <div className="ghost-btn-row">
           <button className="ghost-btn" onClick={onExit}>← Back to Menu</button>
           <Leaderboard
-  topScores={topScores}
-  loading={loading}
-  isNewHighScore={isNewHighScore}
-  onSubmit={(name) => submitScore(name, score, difficulty)}
-/>
+            topScores={topScores}
+            loading={loading}
+            isNewHighScore={isNewHighScore}
+            onSubmit={(name) => submitScore(name, score, difficulty)}
+          />
         </div>
       </ArcadeScreen>
     );

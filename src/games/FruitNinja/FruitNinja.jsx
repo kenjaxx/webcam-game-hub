@@ -53,8 +53,6 @@ export default function FruitNinja({ onExit }) {
   const [isNewHighScore, setIsNewHighScore] = useState(false);
   const [handDetected, setHandDetected] = useState(false);
   const [muted, setMutedState] = useState(getMuted());
-  const openPalmHeldSince = useRef(null);
-const [isPaused, setIsPaused] = useState(false);
 
   const fruits = useRef([]);
   const particles = useRef([]);
@@ -68,6 +66,7 @@ const [isPaused, setIsPaused] = useState(false);
   const scoreRef = useRef(0);
   const livesRef = useRef(STARTING_LIVES);
   const hasEndedRef = useRef(false);
+  const roundStartTimeRef = useRef(0);
 
   const gameActive = difficulty && countdown === null && !gameOver;
   gameActiveRef.current = gameActive;
@@ -84,6 +83,7 @@ const [isPaused, setIsPaused] = useState(false);
     scoreRef.current = 0;
     livesRef.current = STARTING_LIVES;
     hasEndedRef.current = false;
+    roundStartTimeRef.current = Date.now();
     setScore(0);
     setLives(STARTING_LIVES);
     setGameOver(false);
@@ -106,16 +106,6 @@ const [isPaused, setIsPaused] = useState(false);
     }
   }
 
-  if (handData?.gesture === 'open_palm' && gameActiveRef.current) {
-  if (!openPalmHeldSince.current) openPalmHeldSince.current = now;
-  if (now - openPalmHeldSince.current > 800) {
-    setIsPaused((p) => !p);
-    openPalmHeldSince.current = null;
-  }
-} else {
-  openPalmHeldSince.current = null;
-}
-
   function endGame() {
     if (hasEndedRef.current) return;
     hasEndedRef.current = true;
@@ -123,21 +113,17 @@ const [isPaused, setIsPaused] = useState(false);
     setGameOver(true);
     const isNew = saveHighScoreIfBetter(difficulty, scoreRef.current);
     setIsNewHighScore(isNew);
+    endGameStatsLog(roundStartTimeRef.current);
   }
 
-
-
   function endGameStatsLog(roundStartTime) {
-  const totalAttempts = attemptsRef.current;
-  const hits = hitsRef.current;
-
-  logSession('whackamole', {
-    score: scoreRef.current,
-    difficulty,
-    accuracy: totalAttempts > 0 ? hits / totalAttempts : 0,
-    durationSec: Math.round((Date.now() - roundStartTime) / 1000),
-  });
-}
+    logSession('fruitninja', {
+      score: scoreRef.current,
+      difficulty,
+      accuracy: null,
+      durationSec: Math.round((Date.now() - roundStartTime) / 1000),
+    });
+  }
 
   function draw(handData, deltaMs) {
     const canvas = canvasRef.current;
@@ -310,11 +296,11 @@ const [isPaused, setIsPaused] = useState(false);
         <div className="ghost-btn-row">
           <button className="ghost-btn" onClick={onExit}>← Back to Menu</button>
           <Leaderboard
-  topScores={topScores}
-  loading={loading}
-  isNewHighScore={isNewHighScore}
-  onSubmit={(name) => submitScore(name, score, difficulty)}
-/>
+            topScores={topScores}
+            loading={loading}
+            isNewHighScore={isNewHighScore}
+            onSubmit={(name) => submitScore(name, score, difficulty)}
+          />
         </div>
       </ArcadeScreen>
     );

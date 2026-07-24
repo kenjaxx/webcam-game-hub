@@ -1,14 +1,14 @@
 import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
 
-// Replace with your actual Firebase project config (Firebase console → Project settings).
 const firebaseConfig = {
-  apiKey: 'YOUR_API_KEY',
-  authDomain: 'YOUR_PROJECT.firebaseapp.com',
-  projectId: 'YOUR_PROJECT_ID',
-  storageBucket: 'YOUR_PROJECT.appspot.com',
-  messagingSenderId: 'YOUR_SENDER_ID',
-  appId: 'YOUR_APP_ID',
+  apiKey: "AIzaSyBvIHBRNvuE3YWz8i_XUwfgB4iRyyJYXcg",
+  authDomain: "webcam-game-hub.firebaseapp.com",
+  projectId: "webcam-game-hub",
+  storageBucket: "webcam-game-hub.firebasestorage.app",
+  messagingSenderId: "896215805845",
+  appId: "1:896215805845:web:332b1dbbf9911592d7d09c",
+  measurementId: "G-SWDWV3CBGC"
 };
 
 export const app = initializeApp(firebaseConfig);

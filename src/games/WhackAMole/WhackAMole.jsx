@@ -29,8 +29,6 @@ export default function WhackAMole({ onExit }) {
   const wrapperRef = useRef(null);
   const [isFullscreen, toggleFullscreen] = useFullscreen(wrapperRef);
   const [countdown, setCountdown] = useCountdown();
-  const openPalmHeldSince = useRef(null);
-const [isPaused, setIsPaused] = useState(false);
 
   const [difficulty, setDifficulty] = useState(null);
   const [activeMole, setActiveMole] = useState(null);
@@ -57,6 +55,9 @@ const [isPaused, setIsPaused] = useState(false);
   const gameActiveRef = useRef(false);
   const scoreRef = useRef(0);
   const streakRef = useRef(0);
+  const roundStartTimeRef = useRef(0);
+  const attemptsRef = useRef(0);
+  const hitsRef = useRef(0);
   const adaptive = useAdaptiveDifficulty();
 
   const holes = getHolePositions(CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -74,10 +75,13 @@ const [isPaused, setIsPaused] = useState(false);
     hasEndedRef.current = false;
     scoreRef.current = 0;
     streakRef.current = 0;
+    attemptsRef.current = 0;
+    hitsRef.current = 0;
     lastSpawnTime.current = 0;
     lastTimerTick.current = 0;
     hitAnimations.current = [];
     particles.current = [];
+    roundStartTimeRef.current = Date.now();
     setDifficulty(chosenDifficulty);
     setCountdown(3);
   }
@@ -96,16 +100,6 @@ const [isPaused, setIsPaused] = useState(false);
     }
   }
 
-  if (handData?.gesture === 'open_palm' && gameActiveRef.current) {
-  if (!openPalmHeldSince.current) openPalmHeldSince.current = now;
-  if (now - openPalmHeldSince.current > 800) {
-    setIsPaused((p) => !p);
-    openPalmHeldSince.current = null;
-  }
-} else {
-  openPalmHeldSince.current = null;
-}
-
   function endGame() {
     if (hasEndedRef.current) return;
     hasEndedRef.current = true;
@@ -113,21 +107,20 @@ const [isPaused, setIsPaused] = useState(false);
     setGameOver(true);
     const isNew = saveHighScoreIfBetter(difficulty, scoreRef.current);
     setIsNewHighScore(isNew);
+    endGameStatsLog(roundStartTimeRef.current);
   }
 
-
-
   function endGameStatsLog(roundStartTime) {
-  const totalAttempts = attemptsRef.current;
-  const hits = hitsRef.current;
+    const totalAttempts = attemptsRef.current;
+    const hits = hitsRef.current;
 
-  logSession('whackamole', {
-    score: scoreRef.current,
-    difficulty,
-    accuracy: totalAttempts > 0 ? hits / totalAttempts : 0,
-    durationSec: Math.round((Date.now() - roundStartTime) / 1000),
-  });
-}
+    logSession('whackamole', {
+      score: scoreRef.current,
+      difficulty,
+      accuracy: totalAttempts > 0 ? hits / totalAttempts : 0,
+      durationSec: Math.round((Date.now() - roundStartTime) / 1000),
+    });
+  }
 
   // Called every animation frame via HandTrackedCanvas. Mole spawning and the
   // round timer live here too now, driven by one clock instead of separate
@@ -142,7 +135,7 @@ const [isPaused, setIsPaused] = useState(false);
 
     if (gameActiveRef.current) {
       const spawnRate = DIFFICULTY_SETTINGS[difficulty].spawnRate / adaptive.getMultiplier();
-    if (now - lastSpawnTime.current > spawnRate) {
+      if (now - lastSpawnTime.current > spawnRate) {
         setActiveMole((prev) => getRandomHoleIndex(holes.length, prev));
         setMoleIsGolden(isGoldenMole());
         setMoleSpawnTime(now);
@@ -255,6 +248,9 @@ const [isPaused, setIsPaused] = useState(false);
           isWithinHole(cursorX, cursorY, holes[activeMole].x, holes[activeMole].y) &&
           now - lastWhackTime.current > 300
         ) {
+          attemptsRef.current += 1;
+          hitsRef.current += 1;
+
           const newStreak = streakRef.current + 1;
           streakRef.current = newStreak;
           const multiplier = getComboMultiplier(newStreak);
@@ -264,6 +260,7 @@ const [isPaused, setIsPaused] = useState(false);
           setScore(scoreRef.current);
           setStreak(newStreak);
           setBestStreak((prev) => Math.max(prev, newStreak));
+          adaptive.recordHit();
 
           hitAnimations.current.push({
             x: holes[activeMole].x,
@@ -282,8 +279,10 @@ const [isPaused, setIsPaused] = useState(false);
           setActiveMole(null);
           lastWhackTime.current = now;
         } else {
+          attemptsRef.current += 1;
           streakRef.current = 0;
           setStreak(0);
+          adaptive.recordMiss();
           hitAnimations.current.push({
             x: cursorX,
             y: cursorY,
@@ -319,11 +318,11 @@ const [isPaused, setIsPaused] = useState(false);
         <div className="ghost-btn-row">
           <button className="ghost-btn" onClick={onExit}>← Back to Menu</button>
           <Leaderboard
-  topScores={topScores}
-  loading={loading}
-  isNewHighScore={isNewHighScore}
-  onSubmit={(name) => submitScore(name, score, difficulty)}
-/>
+            topScores={topScores}
+            loading={loading}
+            isNewHighScore={isNewHighScore}
+            onSubmit={(name) => submitScore(name, score, difficulty)}
+          />
         </div>
       </ArcadeScreen>
     );
