@@ -5,6 +5,9 @@ import HandTrackedCanvas from '../../components/HandTrackedCanvas';
 import { useCountdown } from '../../hooks/useCountdown';
 import { useFullscreen } from '../../hooks/useFullscreen';
 import { THEME, drawArcadeBackground } from '../../shared/theme';
+import Leaderboard from '../../components/Leaderboard';
+import { logSession } from '../../hooks/useSessionStats';
+import { useLeaderboard } from '../../hooks/useLeaderboard';
 import {
   STARTING_LIVES,
   SWIPE_SPEED_THRESHOLD,
@@ -41,6 +44,7 @@ export default function FruitNinja({ onExit }) {
   const wrapperRef = useRef(null);
   const [isFullscreen, toggleFullscreen] = useFullscreen(wrapperRef);
   const [countdown, setCountdown] = useCountdown();
+  const { topScores, loading, submitScore } = useLeaderboard('fruitninja');
 
   const [difficulty, setDifficulty] = useState(null);
   const [score, setScore] = useState(0);
@@ -49,6 +53,8 @@ export default function FruitNinja({ onExit }) {
   const [isNewHighScore, setIsNewHighScore] = useState(false);
   const [handDetected, setHandDetected] = useState(false);
   const [muted, setMutedState] = useState(getMuted());
+  const openPalmHeldSince = useRef(null);
+const [isPaused, setIsPaused] = useState(false);
 
   const fruits = useRef([]);
   const particles = useRef([]);
@@ -100,6 +106,16 @@ export default function FruitNinja({ onExit }) {
     }
   }
 
+  if (handData?.gesture === 'open_palm' && gameActiveRef.current) {
+  if (!openPalmHeldSince.current) openPalmHeldSince.current = now;
+  if (now - openPalmHeldSince.current > 800) {
+    setIsPaused((p) => !p);
+    openPalmHeldSince.current = null;
+  }
+} else {
+  openPalmHeldSince.current = null;
+}
+
   function endGame() {
     if (hasEndedRef.current) return;
     hasEndedRef.current = true;
@@ -108,6 +124,20 @@ export default function FruitNinja({ onExit }) {
     const isNew = saveHighScoreIfBetter(difficulty, scoreRef.current);
     setIsNewHighScore(isNew);
   }
+
+
+
+  function endGameStatsLog(roundStartTime) {
+  const totalAttempts = attemptsRef.current;
+  const hits = hitsRef.current;
+
+  logSession('whackamole', {
+    score: scoreRef.current,
+    difficulty,
+    accuracy: totalAttempts > 0 ? hits / totalAttempts : 0,
+    durationSec: Math.round((Date.now() - roundStartTime) / 1000),
+  });
+}
 
   function draw(handData, deltaMs) {
     const canvas = canvasRef.current;
@@ -279,6 +309,12 @@ export default function FruitNinja({ onExit }) {
         </div>
         <div className="ghost-btn-row">
           <button className="ghost-btn" onClick={onExit}>← Back to Menu</button>
+          <Leaderboard
+  topScores={topScores}
+  loading={loading}
+  isNewHighScore={isNewHighScore}
+  onSubmit={(name) => submitScore(name, score, difficulty)}
+/>
         </div>
       </ArcadeScreen>
     );

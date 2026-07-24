@@ -4,6 +4,9 @@ import GameHUD from '../../components/GameHUD';
 import HandTrackedCanvas from '../../components/HandTrackedCanvas';
 import { useCountdown } from '../../hooks/useCountdown';
 import { useFullscreen } from '../../hooks/useFullscreen';
+import Leaderboard from '../../components/Leaderboard';
+import { useLeaderboard } from '../../hooks/useLeaderboard';
+import { logSession } from '../../hooks/useSessionStats';
 import { THEME, drawArcadeBackground } from '../../shared/theme';
 import {
   CANVAS_WIDTH,
@@ -57,6 +60,9 @@ export default function Pong({ onExit }) {
   const livesRef = useRef(STARTING_LIVES);
   const hasEndedRef = useRef(false);
   const servePauseUntil = useRef(0);
+  const { topScores, loading, submitScore } = useLeaderboard('pong');
+  const openPalmHeldSince = useRef(null);
+const [isPaused, setIsPaused] = useState(false);
 
   const gameActive = difficulty && countdown === null && !gameOver;
   gameActiveRef.current = gameActive;
@@ -95,6 +101,16 @@ export default function Pong({ onExit }) {
     }
   }
 
+  if (handData?.gesture === 'open_palm' && gameActiveRef.current) {
+  if (!openPalmHeldSince.current) openPalmHeldSince.current = now;
+  if (now - openPalmHeldSince.current > 800) {
+    setIsPaused((p) => !p);
+    openPalmHeldSince.current = null;
+  }
+} else {
+  openPalmHeldSince.current = null;
+}
+
   function endGame() {
     if (hasEndedRef.current) return;
     hasEndedRef.current = true;
@@ -103,6 +119,19 @@ export default function Pong({ onExit }) {
     const isNew = saveHighScoreIfBetter(difficulty, scoreRef.current);
     setIsNewHighScore(isNew);
   }
+
+
+  function endGameStatsLog(roundStartTime) {
+  const totalAttempts = attemptsRef.current;
+  const hits = hitsRef.current;
+
+  logSession('whackamole', {
+    score: scoreRef.current,
+    difficulty,
+    accuracy: totalAttempts > 0 ? hits / totalAttempts : 0,
+    durationSec: Math.round((Date.now() - roundStartTime) / 1000),
+  });
+}
 
   function handlePoint(scorer) {
     const settings = DIFFICULTY_SETTINGS[difficulty];
@@ -259,6 +288,12 @@ export default function Pong({ onExit }) {
         </div>
         <div className="ghost-btn-row">
           <button className="ghost-btn" onClick={onExit}>← Back to Menu</button>
+          <Leaderboard
+  topScores={topScores}
+  loading={loading}
+  isNewHighScore={isNewHighScore}
+  onSubmit={(name) => submitScore(name, score, difficulty)}
+/>
         </div>
       </ArcadeScreen>
     );

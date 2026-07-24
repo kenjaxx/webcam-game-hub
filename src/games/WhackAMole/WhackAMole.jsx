@@ -3,8 +3,12 @@ import ArcadeScreen from '../../components/ArcadeScreen';
 import GameHUD from '../../components/GameHUD';
 import HandTrackedCanvas from '../../components/HandTrackedCanvas';
 import { useCountdown } from '../../hooks/useCountdown';
+import { useAdaptiveDifficulty } from '../../hooks/useAdaptiveDifficulty';
 import { useFullscreen } from '../../hooks/useFullscreen';
 import { THEME, drawArcadeBackground } from '../../shared/theme';
+import { logSession } from '../../hooks/useSessionStats';
+import Leaderboard from '../../components/Leaderboard';
+import { useLeaderboard } from '../../hooks/useLeaderboard';
 import {
   getHolePositions,
   getRandomHoleIndex,
@@ -25,6 +29,8 @@ export default function WhackAMole({ onExit }) {
   const wrapperRef = useRef(null);
   const [isFullscreen, toggleFullscreen] = useFullscreen(wrapperRef);
   const [countdown, setCountdown] = useCountdown();
+  const openPalmHeldSince = useRef(null);
+const [isPaused, setIsPaused] = useState(false);
 
   const [difficulty, setDifficulty] = useState(null);
   const [activeMole, setActiveMole] = useState(null);
@@ -38,6 +44,7 @@ export default function WhackAMole({ onExit }) {
   const [isNewHighScore, setIsNewHighScore] = useState(false);
   const [handDetected, setHandDetected] = useState(false);
   const [muted, setMutedState] = useState(getMuted());
+  const { topScores, loading, submitScore } = useLeaderboard('whackamole');
 
   const lastWhackTime = useRef(0);
   const lastPinchState = useRef(false);
@@ -50,6 +57,7 @@ export default function WhackAMole({ onExit }) {
   const gameActiveRef = useRef(false);
   const scoreRef = useRef(0);
   const streakRef = useRef(0);
+  const adaptive = useAdaptiveDifficulty();
 
   const holes = getHolePositions(CANVAS_WIDTH, CANVAS_HEIGHT);
   const gameActive = difficulty && countdown === null && !gameOver;
@@ -88,6 +96,16 @@ export default function WhackAMole({ onExit }) {
     }
   }
 
+  if (handData?.gesture === 'open_palm' && gameActiveRef.current) {
+  if (!openPalmHeldSince.current) openPalmHeldSince.current = now;
+  if (now - openPalmHeldSince.current > 800) {
+    setIsPaused((p) => !p);
+    openPalmHeldSince.current = null;
+  }
+} else {
+  openPalmHeldSince.current = null;
+}
+
   function endGame() {
     if (hasEndedRef.current) return;
     hasEndedRef.current = true;
@@ -96,6 +114,20 @@ export default function WhackAMole({ onExit }) {
     const isNew = saveHighScoreIfBetter(difficulty, scoreRef.current);
     setIsNewHighScore(isNew);
   }
+
+
+
+  function endGameStatsLog(roundStartTime) {
+  const totalAttempts = attemptsRef.current;
+  const hits = hitsRef.current;
+
+  logSession('whackamole', {
+    score: scoreRef.current,
+    difficulty,
+    accuracy: totalAttempts > 0 ? hits / totalAttempts : 0,
+    durationSec: Math.round((Date.now() - roundStartTime) / 1000),
+  });
+}
 
   // Called every animation frame via HandTrackedCanvas. Mole spawning and the
   // round timer live here too now, driven by one clock instead of separate
@@ -109,8 +141,8 @@ export default function WhackAMole({ onExit }) {
     setHandDetected(!!handData);
 
     if (gameActiveRef.current) {
-      const spawnRate = DIFFICULTY_SETTINGS[difficulty].spawnRate;
-      if (now - lastSpawnTime.current > spawnRate) {
+      const spawnRate = DIFFICULTY_SETTINGS[difficulty].spawnRate / adaptive.getMultiplier();
+    if (now - lastSpawnTime.current > spawnRate) {
         setActiveMole((prev) => getRandomHoleIndex(holes.length, prev));
         setMoleIsGolden(isGoldenMole());
         setMoleSpawnTime(now);
@@ -286,6 +318,12 @@ export default function WhackAMole({ onExit }) {
         </div>
         <div className="ghost-btn-row">
           <button className="ghost-btn" onClick={onExit}>← Back to Menu</button>
+          <Leaderboard
+  topScores={topScores}
+  loading={loading}
+  isNewHighScore={isNewHighScore}
+  onSubmit={(name) => submitScore(name, score, difficulty)}
+/>
         </div>
       </ArcadeScreen>
     );
