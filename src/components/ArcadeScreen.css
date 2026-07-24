@@ -1,0 +1,207 @@
+/* Shared full-screen arcade backdrop for difficulty-select / game-over screens.
+   Fixed positioning intentionally escapes the #root width/border constraint
+   so these screens go true edge-to-edge, matching the homepage. */
+
+.screen {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 3rem 1.5rem;
+  background: #07050d;
+  color: #e8e4f3;
+}
+
+.screen__bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.screen__grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(180, 91, 255, 0.14) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(180, 91, 255, 0.14) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 20%, #000 40%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 20%, #000 40%, transparent 100%);
+  opacity: 0.6;
+}
+
+.screen__glow {
+  position: absolute;
+  top: -15%;
+  left: 50%;
+  width: 55vw;
+  height: 55vw;
+  max-width: 600px;
+  max-height: 600px;
+  transform: translate(-50%, 0);
+  background: radial-gradient(circle, rgba(170, 59, 255, 0.3) 0%, transparent 70%);
+  filter: blur(10px);
+  animation: screenGlowDrift 22s ease-in-out infinite;
+}
+
+@keyframes screenGlowDrift {
+  0%, 100% { transform: translate(-50%, 0) scale(1); }
+  50% { transform: translate(-46%, 4%) scale(1.1); }
+}
+
+.screen__scanlines {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.18) 0px,
+    rgba(0, 0, 0, 0.18) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: overlay;
+  opacity: 0.5;
+}
+
+.screen__content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 640px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1rem;
+}
+
+.screen__eyebrow {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #ffbb3d;
+}
+
+.screen__title {
+  margin: 0;
+  font-family: 'Chakra Petch', var(--heading);
+  font-weight: 700;
+  font-size: clamp(1.8rem, 5vw, 2.6rem);
+  color: #f4f0ff;
+  text-shadow: 0 0 16px rgba(180, 91, 255, 0.5);
+}
+
+/* Difficulty selection */
+
+.difficulty-grid {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: 100%;
+}
+
+.difficulty-card {
+  position: relative;
+  min-width: 140px;
+  padding: 1.1rem 1.4rem;
+  border: 1px solid rgba(180, 91, 255, 0.3);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #1a1428 0%, #120d1f 100%);
+  color: #f4f0ff;
+  font-family: inherit;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.difficulty-card__label {
+  display: block;
+  font-weight: 600;
+  font-size: 1.05rem;
+  margin-bottom: 0.35rem;
+}
+
+.difficulty-card__best {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: #a79fc2;
+}
+
+.difficulty-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(53, 230, 255, 0.6);
+  box-shadow: 0 10px 22px -10px rgba(53, 230, 255, 0.35);
+}
+
+.difficulty-card:focus-visible {
+  outline: 2px solid #35e6ff;
+  outline-offset: 3px;
+}
+
+/* Buttons */
+
+.ghost-btn {
+  padding: 0.7rem 1.4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(180, 91, 255, 0.4);
+  background: rgba(180, 91, 255, 0.08);
+  color: #f4f0ff;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.ghost-btn:hover {
+  border-color: #35e6ff;
+  background: rgba(53, 230, 255, 0.1);
+  transform: translateY(-2px);
+}
+
+.ghost-btn:focus-visible {
+  outline: 2px solid #35e6ff;
+  outline-offset: 3px;
+}
+
+.ghost-btn-row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 0.5rem;
+}
+
+/* Game over stats */
+
+.stat-line {
+  margin: 0;
+  font-size: 1rem;
+  color: #c9c3dc;
+}
+
+.stat-line--muted {
+  margin: 0;
+  color: #a79fc2;
+  font-size: 0.85rem;
+}
+
+.high-score-banner {
+  margin: 0;
+  font-weight: 700;
+  font-size: 1.15rem;
+  color: #ffbb3d;
+  text-shadow: 0 0 12px rgba(255, 187, 61, 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen__glow { animation: none; }
+  .difficulty-card, .ghost-btn { transition: none; }
+}

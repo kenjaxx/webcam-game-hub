@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import WebcamFeed from '../../components/WebcamFeed';
+import ArcadeScreen from '../../components/ArcadeScreen';
 import {
   FRUIT_RADIUS,
   STARTING_LIVES,
@@ -312,7 +313,8 @@ export default function FruitNinja({ onExit }) {
     width: '100%',
     height: isFullscreen ? '100vh' : 'auto',
     background: isFullscreen ? '#1a1a1a' : 'transparent',
-    padding: isFullscreen ? '1rem' : '0',
+    padding: '1rem',
+    textAlign: 'center',
     boxSizing: 'border-box',
   };
 
@@ -326,42 +328,38 @@ export default function FruitNinja({ onExit }) {
   // --- Screen 1: Difficulty Select ---
   if (!difficulty) {
     return (
-      <div style={{ textAlign: 'center' }}>
-        <h2>Fruit Ninja 🍉</h2>
-        <p>Swipe your hand fast across fruit to slice them. Avoid the 💣 bombs!</p>
-        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+      <ArcadeScreen eyebrow="Select Difficulty" title="Fruit Ninja 🍉">
+        <p className="stat-line--muted">Swipe your hand fast across fruit to slice them. Avoid the 💣 bombs!</p>
+        <div className="difficulty-grid">
           {Object.entries(DIFFICULTY_SETTINGS).map(([key, setting]) => (
-            <button key={key} onClick={() => startNewRound(key)} style={{ padding: '0.75rem 1.5rem' }}>
-              {setting.label}
-              <div style={{ fontSize: '0.7rem', color: '#888' }}>Best: {getHighScore(key)}</div>
+            <button key={key} className="difficulty-card" onClick={() => startNewRound(key)}>
+              <span className="difficulty-card__label">{setting.label}</span>
+              <span className="difficulty-card__best">Best {getHighScore(key)}</span>
             </button>
           ))}
         </div>
-        <button onClick={onExit} style={{ marginTop: '1.5rem' }}>← Back to Menu</button>
-      </div>
+        <div className="ghost-btn-row">
+          <button className="ghost-btn" onClick={onExit}>← Back to Menu</button>
+        </div>
+      </ArcadeScreen>
     );
   }
 
   // --- Screen 2: Game Over ---
   if (gameOver) {
     return (
-      <div style={{ textAlign: 'center' }}>
-        <h2>Game Over!</h2>
-        {isNewHighScore && (
-          <p style={{ color: '#ffd700', fontWeight: 'bold', fontSize: '1.2rem' }}>
-            🎉 New High Score!
-          </p>
-        )}
-        <p>Final Score: {score}</p>
-        <p style={{ color: '#666' }}>
-          Difficulty: {DIFFICULTY_SETTINGS[difficulty].label} | High Score: {getHighScore(difficulty)}
+      <ArcadeScreen eyebrow="Round Over" title="Game Over!">
+        {isNewHighScore && <p className="high-score-banner">🎉 New High Score!</p>}
+        <p className="stat-line">Final Score: {score}</p>
+        <p className="stat-line--muted">
+          Difficulty: {DIFFICULTY_SETTINGS[difficulty].label} · High Score: {getHighScore(difficulty)}
         </p>
-        <button onClick={() => startNewRound(difficulty)}>Play Again</button>
-        <button onClick={() => setDifficulty(null)} style={{ marginLeft: '0.5rem' }}>
-          Change Difficulty
-        </button>
-        <button onClick={onExit} style={{ marginLeft: '0.5rem' }}>Back to Menu</button>
-      </div>
+        <div className="ghost-btn-row">
+          <button className="ghost-btn" onClick={() => startNewRound(difficulty)}>Play Again</button>
+          <button className="ghost-btn" onClick={() => setDifficulty(null)}>Change Difficulty</button>
+          <button className="ghost-btn" onClick={onExit}>Back to Menu</button>
+        </div>
+      </ArcadeScreen>
     );
   }
 

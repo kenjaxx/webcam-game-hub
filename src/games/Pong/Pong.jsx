@@ -2,50 +2,63 @@ import { useEffect, useRef, useState } from 'react';
 import WebcamFeed from '../../components/WebcamFeed';
 import ArcadeScreen from '../../components/ArcadeScreen';
 import {
-  BIRD_X,
-  BIRD_RADIUS,
-  PIPE_WIDTH,
-  GRAVITY,
-  PIPE_SPAWN_DISTANCE,
+  CANVAS_WIDTH,
+  CANVAS_HEIGHT,
+  PADDLE_WIDTH,
+  PADDLE_HEIGHT,
+  BALL_RADIUS,
+  PLAYER_X,
+  AI_X,
+  STARTING_LIVES,
   DIFFICULTY_SETTINGS,
-  createPipe,
-  checkPipeCollision,
-  checkBoundsCollision,
+  createBall,
+  updateBallPhysics,
+  checkPaddleCollision,
+  updateAIPaddle,
+  clampPaddleY,
 } from './logic';
-import { playScoreSound, playCollisionSound, playGameOverSound, playCountdownBeep, setMuted } from './sounds';
+import {
+  playPaddleHitSound,
+  playWallBounceSound,
+  playScoreSound,
+  playMissSound,
+  playGameOverSound,
+  playCountdownBeep,
+  setMuted,
+} from './sounds';
 import { getHighScore, saveHighScoreIfBetter } from './storage';
 
-const CANVAS_WIDTH = 480;
-const CANVAS_HEIGHT = 360;
-
-export default function FlappyBird({ onExit }) {
+export default function Pong({ onExit }) {
   const canvasRef = useRef(null);
   const wrapperRef = useRef(null);
 
   const [difficulty, setDifficulty] = useState(null);
   const [countdown, setCountdown] = useState(null);
   const [score, setScore] = useState(0);
+  const [lives, setLives] = useState(STARTING_LIVES);
   const [gameOver, setGameOver] = useState(false);
   const [isNewHighScore, setIsNewHighScore] = useState(false);
   const [handDetected, setHandDetected] = useState(false);
   const [muted, setMutedState] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [pointFlash, setPointFlash] = useState(null); // 'player' | 'ai' | null, for the brief serve pause
 
-  // Game state kept in refs since it updates every frame (avoids excessive re-renders)
-  const birdY = useRef(CANVAS_HEIGHT / 2);
-  const birdVelocity = useRef(0);
-  const pipes = useRef([]);
+  // Fast-changing game state lives in refs to avoid re-render churn every frame
+  const ball = useRef(null);
+  const playerPaddleY = useRef(CANVAS_HEIGHT / 2);
+  const aiPaddleY = useRef(CANVAS_HEIGHT / 2);
   const particles = useRef([]);
   const lastFrameTime = useRef(null);
   const screenShake = useRef(0);
-  const gameActiveRef = useRef(false); // mirrors gameActive but readable inside draw() without stale closures
+  const gameActiveRef = useRef(false);
   const scoreRef = useRef(0);
-  const hasCollidedRef = useRef(false);
+  const livesRef = useRef(STARTING_LIVES);
+  const hasEndedRef = useRef(false);
+  const servePauseUntil = useRef(0);
 
   const gameActive = difficulty && countdown === null && !gameOver;
   gameActiveRef.current = gameActive;
 
-  // Fullscreen tracking
   useEffect(() => {
     function handleFullscreenChange() {
       setIsFullscreen(!!document.fullscreenElement);
@@ -76,26 +89,30 @@ export default function FlappyBird({ onExit }) {
     return () => clearTimeout(timeout);
   }, [countdown]);
 
-  // Reset game state whenever a fresh round starts (difficulty just chosen)
   function startNewRound(chosenDifficulty) {
-    birdY.current = CANVAS_HEIGHT / 2;
-    birdVelocity.current = 0;
-    pipes.current = [createPipe(CANVAS_WIDTH, CANVAS_HEIGHT, DIFFICULTY_SETTINGS[chosenDifficulty].gapSize)];
+    const settings = DIFFICULTY_SETTINGS[chosenDifficulty];
+    ball.current = createBall(settings.ballSpeed);
+    playerPaddleY.current = CANVAS_HEIGHT / 2;
+    aiPaddleY.current = CANVAS_HEIGHT / 2;
     particles.current = [];
     lastFrameTime.current = null;
     screenShake.current = 0;
     scoreRef.current = 0;
-    hasCollidedRef.current = false;
+    livesRef.current = STARTING_LIVES;
+    hasEndedRef.current = false;
+    servePauseUntil.current = 0;
     setScore(0);
+    setLives(STARTING_LIVES);
     setGameOver(false);
     setIsNewHighScore(false);
+    setPointFlash(null);
     setDifficulty(chosenDifficulty);
     setCountdown(3);
   }
 
-  function spawnParticles(x, y, color) {
-    for (let i = 0; i < 16; i++) {
-      const angle = (Math.PI * 2 * i) / 16;
+  function spawnParticles(x, y, color, count = 14) {
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count;
       particles.current.push({
         x,
         y,
@@ -107,83 +124,97 @@ export default function FlappyBird({ onExit }) {
     }
   }
 
-  function triggerGameOver() {
-    if (hasCollidedRef.current) return; // prevent double-trigger in same frame
-    hasCollidedRef.current = true;
-    playCollisionSound();
-    spawnParticles(BIRD_X, birdY.current, 'rgba(255, 200, 50, ALPHA)');
-    screenShake.current = 10;
+  function endGame() {
+    if (hasEndedRef.current) return;
+    hasEndedRef.current = true;
+    playGameOverSound();
+    setGameOver(true);
+    const isNew = saveHighScoreIfBetter(difficulty, scoreRef.current);
+    setIsNewHighScore(isNew);
+  }
 
-    setTimeout(() => {
-      playGameOverSound();
-      setGameOver(true);
-      const isNew = saveHighScoreIfBetter(difficulty, scoreRef.current);
-      setIsNewHighScore(isNew);
-    }, 300);
+  // Handles a point being scored, resets the ball, and gives a brief on-screen flash
+  function handlePoint(scorer) {
+    const settings = DIFFICULTY_SETTINGS[difficulty];
+
+    if (scorer === 'player') {
+      scoreRef.current += 1;
+      setScore(scoreRef.current);
+      playScoreSound();
+      spawnParticles(CANVAS_WIDTH - BALL_RADIUS - 4, ball.current.y, 'rgba(100, 220, 100, ALPHA)');
+    } else {
+      livesRef.current = Math.max(0, livesRef.current - 1);
+      setLives(livesRef.current);
+      playMissSound();
+      screenShake.current = 10;
+      spawnParticles(BALL_RADIUS + 4, ball.current.y, 'rgba(255, 100, 100, ALPHA)');
+    }
+
+    setPointFlash(scorer);
+    setTimeout(() => setPointFlash(null), 500);
+
+    if (scorer === 'ai' && livesRef.current <= 0) {
+      endGame();
+      return;
+    }
+
+    // Serve toward whoever just lost the point
+    ball.current = createBall(settings.ballSpeed, scorer === 'player' ? false : true);
+    servePauseUntil.current = Date.now() + 500;
   }
 
   function draw(handData) {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || !ball.current) return;
     const ctx = canvas.getContext('2d');
 
     setHandDetected(!!handData);
 
-    // Calculate delta time for frame-rate-independent movement
     const now = Date.now();
     const dt = lastFrameTime.current ? Math.min((now - lastFrameTime.current) / 16.67, 3) : 1;
     lastFrameTime.current = now;
 
     // --- UPDATE ---
-    if (gameActiveRef.current && !hasCollidedRef.current) {
-      if (handData) {
-        // Direct control: bird follows hand height, with light smoothing for natural feel
-        const targetY = handData.y * CANVAS_HEIGHT;
-        birdY.current += (targetY - birdY.current) * 0.25;
-        birdVelocity.current = 0;
-      } else {
-        // No hand detected - gravity takes over, bird falls
-        birdVelocity.current += GRAVITY * dt;
-        birdY.current += birdVelocity.current * dt;
+    if (handData) {
+      const targetY = handData.y * CANVAS_HEIGHT;
+      playerPaddleY.current += (targetY - playerPaddleY.current) * 0.35;
+      playerPaddleY.current = clampPaddleY(playerPaddleY.current);
+    }
+
+    if (gameActiveRef.current && !hasEndedRef.current && now >= servePauseUntil.current) {
+      const settings = DIFFICULTY_SETTINGS[difficulty];
+
+      aiPaddleY.current = updateAIPaddle(aiPaddleY.current, ball.current, settings, dt);
+
+      const prevBallX = ball.current.x;
+      const prevBallY = ball.current.y;
+
+      const wallHit = updateBallPhysics(ball.current, dt);
+      if (wallHit) playWallBounceSound();
+
+      const hitPlayer = checkPaddleCollision(ball.current, prevBallX, prevBallY, playerPaddleY.current, PLAYER_X, true);
+      if (hitPlayer) {
+        playPaddleHitSound();
+        spawnParticles(ball.current.x, ball.current.y, 'rgba(255,255,255,ALPHA)', 8);
       }
 
-      const speed = DIFFICULTY_SETTINGS[difficulty].speed * dt;
-
-      // Move pipes left, check scoring, remove off-screen pipes
-      pipes.current.forEach((pipe) => {
-        pipe.x -= speed;
-        if (!pipe.passed && pipe.x + PIPE_WIDTH < BIRD_X) {
-          pipe.passed = true;
-          scoreRef.current += 1;
-          setScore(scoreRef.current);
-          playScoreSound();
-        }
-      });
-      pipes.current = pipes.current.filter((pipe) => pipe.x + PIPE_WIDTH > -20);
-
-      // Spawn new pipe when the last one is far enough left
-      const lastPipe = pipes.current[pipes.current.length - 1];
-      if (!lastPipe || CANVAS_WIDTH - lastPipe.x >= PIPE_SPAWN_DISTANCE) {
-        pipes.current.push(createPipe(CANVAS_WIDTH, CANVAS_HEIGHT, DIFFICULTY_SETTINGS[difficulty].gapSize));
+      const hitAI = checkPaddleCollision(ball.current, prevBallX, prevBallY, aiPaddleY.current, AI_X, false);
+      if (hitAI) {
+        playPaddleHitSound();
+        spawnParticles(ball.current.x, ball.current.y, 'rgba(255,255,255,ALPHA)', 8);
       }
 
-      // Collision checks
-      if (checkBoundsCollision(birdY.current, CANVAS_HEIGHT)) {
-        triggerGameOver();
-      } else {
-        for (const pipe of pipes.current) {
-          if (checkPipeCollision(birdY.current, pipe, CANVAS_HEIGHT)) {
-            triggerGameOver();
-            break;
-          }
-        }
+      // Off-screen left = AI scored, off-screen right = player scored
+      if (ball.current.x + BALL_RADIUS < 0) {
+        handlePoint('ai');
+      } else if (ball.current.x - BALL_RADIUS > CANVAS_WIDTH) {
+        handlePoint('player');
       }
     }
 
     // --- DRAW ---
     ctx.save();
 
-    // Screen shake offset
     if (screenShake.current > 0) {
       const shakeX = (Math.random() - 0.5) * screenShake.current;
       const shakeY = (Math.random() - 0.5) * screenShake.current;
@@ -191,30 +222,39 @@ export default function FlappyBird({ onExit }) {
       screenShake.current = Math.max(0, screenShake.current - 0.6);
     }
 
-    // Sky background
-    ctx.fillStyle = '#87CEEB';
+    // Court background
+    ctx.fillStyle = '#0f1420';
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    // Pipes
-    pipes.current.forEach((pipe) => {
-      const gapTop = pipe.gapY - pipe.gapSize / 2;
-      const gapBottom = pipe.gapY + pipe.gapSize / 2;
+    // Center dashed line
+    ctx.setLineDash([8, 10]);
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(CANVAS_WIDTH / 2, 0);
+    ctx.lineTo(CANVAS_WIDTH / 2, CANVAS_HEIGHT);
+    ctx.stroke();
+    ctx.setLineDash([]);
 
-      ctx.fillStyle = '#4CAF50';
-      ctx.fillRect(pipe.x, 0, PIPE_WIDTH, gapTop);
-      ctx.fillRect(pipe.x, gapBottom, PIPE_WIDTH, CANVAS_HEIGHT - gapBottom);
+    // Player paddle (mint) and AI paddle (coral)
+    ctx.fillStyle = '#4dd0a5';
+    ctx.fillRect(PLAYER_X, playerPaddleY.current - PADDLE_HEIGHT / 2, PADDLE_WIDTH, PADDLE_HEIGHT);
+    ctx.fillStyle = '#ff6b6b';
+    ctx.fillRect(AI_X, aiPaddleY.current - PADDLE_HEIGHT / 2, PADDLE_WIDTH, PADDLE_HEIGHT);
 
-      // Pipe caps for visual detail
-      ctx.fillStyle = '#3d8b40';
-      ctx.fillRect(pipe.x - 4, gapTop - 15, PIPE_WIDTH + 8, 15);
-      ctx.fillRect(pipe.x - 4, gapBottom, PIPE_WIDTH + 8, 15);
-    });
+    // Ball
+    if (now >= servePauseUntil.current || countdown !== null) {
+      ctx.beginPath();
+      ctx.arc(ball.current.x, ball.current.y, BALL_RADIUS, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffeb3b';
+      ctx.fill();
+    }
 
     // Particles
     particles.current = particles.current.filter((p) => {
-      const age = Date.now() - p.startTime;
-      if (age > 600) return false;
-      const progress = age / 600;
+      const age = now - p.startTime;
+      if (age > 500) return false;
+      const progress = age / 500;
       const px = p.x + p.vx * age * 0.05;
       const py = p.y + p.vy * age * 0.05;
       ctx.fillStyle = p.color.replace('ALPHA', 1 - progress);
@@ -222,31 +262,11 @@ export default function FlappyBird({ onExit }) {
       return true;
     });
 
-    // Bird (hide once collided/exploded)
-    if (!hasCollidedRef.current || gameActiveRef.current === false) {
-      if (!hasCollidedRef.current) {
-        ctx.beginPath();
-        ctx.arc(BIRD_X, birdY.current, BIRD_RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = '#FFC107';
-        ctx.fill();
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        // Simple eye + beak for character
-        ctx.beginPath();
-        ctx.arc(BIRD_X + 6, birdY.current - 5, 3, 0, Math.PI * 2);
-        ctx.fillStyle = '#000';
-        ctx.fill();
-
-        ctx.beginPath();
-        ctx.moveTo(BIRD_X + BIRD_RADIUS - 2, birdY.current);
-        ctx.lineTo(BIRD_X + BIRD_RADIUS + 8, birdY.current - 3);
-        ctx.lineTo(BIRD_X + BIRD_RADIUS + 8, birdY.current + 3);
-        ctx.closePath();
-        ctx.fillStyle = '#FF9800';
-        ctx.fill();
-      }
+    // Point-scored flash
+    if (pointFlash) {
+      ctx.fillStyle =
+        pointFlash === 'player' ? 'rgba(77, 208, 165, 0.15)' : 'rgba(255, 107, 107, 0.15)';
+      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     }
 
     // Countdown overlay
@@ -258,15 +278,6 @@ export default function FlappyBird({ onExit }) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(countdown === 0 ? 'GO!' : countdown, CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2);
-    }
-
-    // Hand cursor indicator (small, unobtrusive, shows where tracking sees your hand)
-    if (handData && gameActiveRef.current) {
-      const cursorY = handData.y * CANVAS_HEIGHT;
-      ctx.beginPath();
-      ctx.arc(30, cursorY, 6, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.6)';
-      ctx.fill();
     }
 
     ctx.restore();
@@ -301,8 +312,10 @@ export default function FlappyBird({ onExit }) {
   // --- Screen 1: Difficulty Select ---
   if (!difficulty) {
     return (
-      <ArcadeScreen eyebrow="Select Difficulty" title="Flappy Bird 🐦">
-        <p className="stat-line--muted">Move your hand up/down to control the bird's height. Keep your hand in frame!</p>
+      <ArcadeScreen eyebrow="Select Difficulty" title="Pong 🏓">
+        <p className="stat-line--muted">
+          Move your hand up/down to control your paddle. You have 5 lives — rack up points before the AI wins them all!
+        </p>
         <div className="difficulty-grid">
           {Object.entries(DIFFICULTY_SETTINGS).map(([key, setting]) => (
             <button key={key} className="difficulty-card" onClick={() => startNewRound(key)}>
@@ -323,7 +336,7 @@ export default function FlappyBird({ onExit }) {
     return (
       <ArcadeScreen eyebrow="Round Over" title="Game Over!">
         {isNewHighScore && <p className="high-score-banner">🎉 New High Score!</p>}
-        <p className="stat-line">Pipes Cleared: {score}</p>
+        <p className="stat-line">Final Score: {score}</p>
         <p className="stat-line--muted">
           Difficulty: {DIFFICULTY_SETTINGS[difficulty].label} · High Score: {getHighScore(difficulty)}
         </p>
@@ -340,7 +353,7 @@ export default function FlappyBird({ onExit }) {
   return (
     <div ref={wrapperRef} style={wrapperStyle}>
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem' }}>
-        <h2 style={{ color: isFullscreen ? 'white' : 'inherit' }}>Flappy Bird 🐦</h2>
+        <h2 style={{ color: isFullscreen ? 'white' : 'inherit' }}>Pong 🏓</h2>
         <button onClick={toggleMute} style={{ fontSize: '1.2rem' }}>
           {muted ? '🔇' : '🔊'}
         </button>
@@ -349,12 +362,12 @@ export default function FlappyBird({ onExit }) {
         </button>
       </div>
       <p style={{ color: isFullscreen ? 'white' : 'inherit' }}>
-        Score: {score} | Difficulty: {DIFFICULTY_SETTINGS[difficulty].label}
+        Score: {score} | Lives: {'❤️'.repeat(lives)}{'🖤'.repeat(STARTING_LIVES - lives)} | Difficulty: {DIFFICULTY_SETTINGS[difficulty].label}
       </p>
 
       {!handDetected && (
         <p style={{ color: 'red', fontWeight: 'bold' }}>
-          ✋ Hand not detected — bird is falling! Move your hand into frame.
+          ✋ Hand not detected — move your hand into frame, with good lighting
         </p>
       )}
 

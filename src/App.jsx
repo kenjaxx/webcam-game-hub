@@ -3,6 +3,7 @@ import GameMenu from './components/GameMenu';
 import WhackAMole from './games/WhackAMole/WhackAMole';
 import FlappyBird from './games/FlappyBird/FlappyBird';
 import FruitNinja from './games/FruitNinja/FruitNinja';
+import Pong from './games/Pong/Pong';
 
 function App() {
   const [selectedGame, setSelectedGame] = useState(null);
@@ -15,16 +16,14 @@ function App() {
         return <FlappyBird onExit={() => setSelectedGame(null)} />;
       case 'fruitninja':
         return <FruitNinja onExit={() => setSelectedGame(null)} />;
+      case 'pong':
+        return <Pong onExit={() => setSelectedGame(null)} />;
       default:
         return null;
     }
   }
 
-  return (
-    <div style={{ fontFamily: 'sans-serif', textAlign: 'center', padding: '1rem' }}>
-      {!selectedGame ? <GameMenu onSelectGame={setSelectedGame} /> : renderGame()}
-    </div>
-  );
+  return selectedGame ? renderGame() : <GameMenu onSelectGame={setSelectedGame} />;
 }
 
 export default App;

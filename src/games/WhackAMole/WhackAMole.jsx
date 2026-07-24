@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import WebcamFeed from '../../components/WebcamFeed';
+import ArcadeScreen from '../../components/ArcadeScreen';
 import {
   getHolePositions,
   getRandomHoleIndex,
@@ -291,7 +292,8 @@ export default function WhackAMole({ onExit }) {
     width: '100%',
     height: isFullscreen ? '100vh' : 'auto',
     background: isFullscreen ? '#1a1a1a' : 'transparent',
-    padding: isFullscreen ? '1rem' : '0',
+    padding: '1rem',
+    textAlign: 'center',
     boxSizing: 'border-box',
   };
 
@@ -306,61 +308,58 @@ export default function WhackAMole({ onExit }) {
   // --- Screen 1: Difficulty Select ---
   if (!difficulty) {
     return (
-      <div style={{ textAlign: 'center' }}>
-        <h2>Whack-a-Mole 🐹</h2>
-        <p>Choose your difficulty:</p>
-        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
+      <ArcadeScreen eyebrow="Select Difficulty" title="Whack-a-Mole 🐹">
+        <p className="stat-line--muted">Pinch to whack moles as they pop up. Golden moles are worth 3x!</p>
+        <div className="difficulty-grid">
           {Object.entries(DIFFICULTY_SETTINGS).map(([key, setting]) => (
             <button
               key={key}
+              className="difficulty-card"
               onClick={() => {
                 setDifficulty(key);
                 setCountdown(3);
               }}
-              style={{ padding: '0.75rem 1.5rem' }}
             >
-              {setting.label}
-              <div style={{ fontSize: '0.7rem', color: '#888' }}>
-                Best: {getHighScore(key)}
-              </div>
+              <span className="difficulty-card__label">{setting.label}</span>
+              <span className="difficulty-card__best">Best {getHighScore(key)}</span>
             </button>
           ))}
         </div>
-        <button onClick={onExit} style={{ marginTop: '1.5rem' }}>← Back to Menu</button>
-      </div>
+        <div className="ghost-btn-row">
+          <button className="ghost-btn" onClick={onExit}>← Back to Menu</button>
+        </div>
+      </ArcadeScreen>
     );
   }
 
   // --- Screen 2: Game Over ---
   if (gameOver) {
     return (
-      <div style={{ textAlign: 'center' }}>
-        <h2>Game Over!</h2>
-        {isNewHighScore && (
-          <p style={{ color: '#ffd700', fontWeight: 'bold', fontSize: '1.2rem' }}>
-            🎉 New High Score!
-          </p>
-        )}
-        <p>Final Score: {score}</p>
-        <p>Best Streak: {bestStreak}</p>
-        <p style={{ color: '#666' }}>
-          Difficulty: {DIFFICULTY_SETTINGS[difficulty].label} | High Score: {getHighScore(difficulty)}
+      <ArcadeScreen eyebrow="Round Over" title="Game Over!">
+        {isNewHighScore && <p className="high-score-banner">🎉 New High Score!</p>}
+        <p className="stat-line">Final Score: {score}</p>
+        <p className="stat-line">Best Streak: {bestStreak}</p>
+        <p className="stat-line--muted">
+          Difficulty: {DIFFICULTY_SETTINGS[difficulty].label} · High Score: {getHighScore(difficulty)}
         </p>
-        <button
-          onClick={() => {
-            setDifficulty(null);
-            setScore(0);
-            setStreak(0);
-            setBestStreak(0);
-            setTimeLeft(GAME_DURATION);
-            setGameOver(false);
-            setIsNewHighScore(false);
-          }}
-        >
-          Play Again
-        </button>
-        <button onClick={onExit} style={{ marginLeft: '0.5rem' }}>Back to Menu</button>
-      </div>
+        <div className="ghost-btn-row">
+          <button
+            className="ghost-btn"
+            onClick={() => {
+              setDifficulty(null);
+              setScore(0);
+              setStreak(0);
+              setBestStreak(0);
+              setTimeLeft(GAME_DURATION);
+              setGameOver(false);
+              setIsNewHighScore(false);
+            }}
+          >
+            Play Again
+          </button>
+          <button className="ghost-btn" onClick={onExit}>Back to Menu</button>
+        </div>
+      </ArcadeScreen>
     );
   }
 
