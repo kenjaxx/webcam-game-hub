@@ -11,7 +11,7 @@ function generateRoomCode() {
   return code;
 }
 
-const emptySide = () => ({ paddleY: 180, score: 0, lives: 5 });
+const emptySide = () => ({ paddleY: 180, score: 0, lives: 5, ready: false });
 
 export function useRoom() {
   const [room, setRoom] = useState(null);
@@ -58,6 +58,9 @@ export function useRoom() {
     return id;
   }, [subscribe]);
 
+  // Joining now drops the guest into a "ready" phase instead of jumping
+  // straight to the countdown, so both players get a chance to set up their
+  // camera first.
   const joinRoom = useCallback(async (id) => {
     const ref = doc(db, ROOM_COLLECTION, id);
     try {
@@ -68,7 +71,7 @@ export function useRoom() {
         if (data.guest) throw new Error('full');
         tx.update(ref, {
           guest: emptySide(),
-          status: 'countdown',
+          status: 'ready',
           updatedAt: serverTimestamp(),
         });
       });
@@ -95,6 +98,14 @@ export function useRoom() {
     }).catch((err) => console.error('Paddle update failed:', err));
   }, [roomId]);
 
+  const setReady = useCallback((forRole, ready) => {
+    if (!roomId) return;
+    updateDoc(doc(db, ROOM_COLLECTION, roomId), {
+      [`${forRole}.ready`]: ready,
+      updatedAt: serverTimestamp(),
+    }).catch((err) => console.error('Ready update failed:', err));
+  }, [roomId]);
+
   const updateGameState = useCallback((partial) => {
     if (!roomId) return;
     updateDoc(doc(db, ROOM_COLLECTION, roomId), {
@@ -105,6 +116,18 @@ export function useRoom() {
 
   const startPlaying = useCallback((ball) => {
     updateGameState({ status: 'playing', ball });
+  }, [updateGameState]);
+
+  // Resets scores/lives/readiness for another round in the SAME room doc, so
+  // the original invite link keeps working instead of forcing a new one.
+  const resetForRematch = useCallback(() => {
+    updateGameState({
+      host: emptySide(),
+      guest: emptySide(),
+      ball: null,
+      winner: null,
+      status: 'ready',
+    });
   }, [updateGameState]);
 
   const leaveRoom = useCallback(() => {
@@ -125,8 +148,10 @@ export function useRoom() {
     createRoom,
     joinRoom,
     updatePaddle,
+    setReady,
     updateGameState,
     startPlaying,
+    resetForRematch,
     leaveRoom,
   };
 }

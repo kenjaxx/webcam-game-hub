@@ -43,8 +43,20 @@ export default function PongOnline({ onExit, initialRoomId }) {
   const [pointFlash, setPointFlash] = useState(null);
   const [copied, setCopied] = useState(false);
 
-  const { room, roomId, role, connectionError, createRoom, joinRoom, updatePaddle, updateGameState, startPlaying, leaveRoom } =
-    useRoom();
+  const {
+    room,
+    roomId,
+    role,
+    connectionError,
+    createRoom,
+    joinRoom,
+    updatePaddle,
+    setReady,
+    updateGameState,
+    startPlaying,
+    resetForRematch,
+    leaveRoom,
+  } = useRoom();
 
   const localPaddleY = useRef(CANVAS_HEIGHT / 2);
   const ballRef = useRef(null);
@@ -55,6 +67,7 @@ export default function PongOnline({ onExit, initialRoomId }) {
   const lastBallSyncRef = useRef(0);
   const autoJoinAttemptedRef = useRef(false);
   const startedRef = useRef(false);
+  const readyTransitionRef = useRef(false);
   const prevStatusRef = useRef(null);
   const roundStartTimeRef = useRef(0);
 
@@ -63,6 +76,11 @@ export default function PongOnline({ onExit, initialRoomId }) {
   const hostLivesRef = useRef(STARTING_LIVES);
   const guestLivesRef = useRef(STARTING_LIVES);
 
+  const mySide = role === 'host' ? 'host' : 'guest';
+  const oppSide = role === 'host' ? 'guest' : 'host';
+  const iAmReady = !!room?.[mySide]?.ready;
+  const opponentReady = !!room?.[oppSide]?.ready;
+
   useEffect(() => {
     if (initialRoomId && !roomId && !autoJoinAttemptedRef.current) {
       autoJoinAttemptedRef.current = true;
@@ -70,12 +88,40 @@ export default function PongOnline({ onExit, initialRoomId }) {
     }
   }, [initialRoomId, roomId, joinRoom]);
 
+  // Once both players hit "Ready", the host (single writer) advances the
+  // room into the 3-2-1 countdown. Guarded by a ref so it only fires once
+  // per ready phase even though this effect re-runs on every snapshot.
+  useEffect(() => {
+    if (
+      role === 'host' &&
+      room?.status === 'ready' &&
+      room.host?.ready &&
+      room.guest?.ready &&
+      !readyTransitionRef.current
+    ) {
+      readyTransitionRef.current = true;
+      updateGameState({ status: 'countdown' });
+    }
+    if (room?.status !== 'ready') {
+      readyTransitionRef.current = false;
+    }
+  }, [role, room?.status, room?.host?.ready, room?.guest?.ready, updateGameState]);
+
   useEffect(() => {
     if (room?.status === 'countdown' && prevStatusRef.current !== 'countdown') {
       setCountdown(3);
     }
     prevStatusRef.current = room?.status;
   }, [room?.status, setCountdown]);
+
+  // Every time we land back on the ready screen (fresh room OR a rematch),
+  // clear the "already started this round" guard so the next countdown can
+  // spawn a fresh ball again.
+  useEffect(() => {
+    if (room?.status === 'ready') {
+      startedRef.current = false;
+    }
+  }, [room?.status]);
 
   useEffect(() => {
     if (role === 'host' && room?.status === 'countdown' && countdown === null && !startedRef.current) {
@@ -91,9 +137,6 @@ export default function PongOnline({ onExit, initialRoomId }) {
       startPlaying(ball);
     }
   }, [role, room?.status, room?.difficulty, countdown, startPlaying]);
-
-  const mySide = role === 'host' ? 'host' : 'guest';
-  const oppSide = role === 'host' ? 'guest' : 'host';
 
   function spawnParticles(x, y, color, count = 12) {
     for (let i = 0; i < count; i++) {
@@ -158,6 +201,35 @@ export default function PongOnline({ onExit, initialRoomId }) {
       'guest.score': guestScoreRef.current,
       'guest.lives': guestLivesRef.current,
     });
+  }
+
+  // Lightweight camera preview shown on the ready screen — just confirms hand
+  // tracking is working before the match starts, no gameplay logic involved.
+  function drawReady(handData) {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    setHandDetected(!!handData);
+
+    drawArcadeBackground(ctx, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    ctx.fillStyle = THEME.text;
+    ctx.font = `bold 18px ${THEME.fontHeading}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Move your hand to test tracking', CANVAS_WIDTH / 2, 26);
+
+    if (handData) {
+      const cursorX = (1 - handData.x) * CANVAS_WIDTH;
+      const cursorY = handData.y * CANVAS_HEIGHT;
+      ctx.beginPath();
+      ctx.arc(cursorX, cursorY, 10, 0, Math.PI * 2);
+      ctx.fillStyle = THEME.gold;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#160f24';
+      ctx.stroke();
+    }
   }
 
   function draw(handData, deltaMs) {
@@ -308,16 +380,17 @@ export default function PongOnline({ onExit, initialRoomId }) {
   }
 
   function handleLeave() {
-    if (roomId && room && (room.status === 'countdown' || room.status === 'playing')) {
+    if (roomId && room && ['ready', 'countdown', 'playing', 'gameover'].includes(room.status)) {
       updateGameState({ status: 'abandoned' });
     }
     leaveRoom();
     onExit();
   }
 
-  function handlePlayAgain() {
-    startedRef.current = false;
-    leaveRoom();
+  // Resets scores/lives/readiness but keeps the SAME room doc — and therefore
+  // the same invite link — so both players can go again without re-sharing anything.
+  function handleRematch() {
+    resetForRematch();
   }
 
   if (connectionError) {
@@ -387,8 +460,8 @@ export default function PongOnline({ onExit, initialRoomId }) {
           Final Score — You: {room[mySide]?.score ?? 0} · Opponent: {room[oppSide]?.score ?? 0}
         </p>
         <div className="ghost-btn-row">
-          <button className="ghost-btn" onClick={handlePlayAgain}>New Game</button>
-          <button className="ghost-btn" onClick={onExit}>Back to Menu</button>
+          <button className="ghost-btn" onClick={handleRematch}>Play Again (Same Link)</button>
+          <button className="ghost-btn" onClick={handleLeave}>Back to Menu</button>
         </div>
       </ArcadeScreen>
     );
@@ -399,7 +472,7 @@ export default function PongOnline({ onExit, initialRoomId }) {
     return (
       <ArcadeScreen eyebrow="Waiting For Opponent" title="Pong Online 🏓🌐">
         <p className="stat-line--muted">
-          Send this link to a friend on another device. The game starts as soon as they open it.
+          Send this link to a friend on another device. You'll both get a chance to ready up once they join.
         </p>
         <div className="invite-box">
           <code className="invite-link">{inviteLink}</code>
@@ -410,6 +483,55 @@ export default function PongOnline({ onExit, initialRoomId }) {
           <button className="ghost-btn" onClick={handleLeave}>Cancel</button>
         </div>
       </ArcadeScreen>
+    );
+  }
+
+  if (room.status === 'ready') {
+    const inviteLink = `${window.location.origin}${window.location.pathname}?game=pongonline&room=${roomId}`;
+    return (
+      <div ref={wrapperRef} className={`game-wrapper${isFullscreen ? ' game-wrapper--fullscreen' : ''}`}>
+        <GameHUD
+          title="Pong Online 🏓🌐"
+          isFullscreen={isFullscreen}
+          muted={muted}
+          onToggleMute={toggleMute}
+          onToggleFullscreen={toggleFullscreen}
+          stats={`Difficulty: ${DIFFICULTY_SETTINGS[room.difficulty]?.label ?? room.difficulty}`}
+          warning={!handDetected ? 'Hand not detected — move your hand into frame, with good lighting' : null}
+        />
+
+        <HandTrackedCanvas
+          canvasRef={canvasRef}
+          width={CANVAS_WIDTH}
+          height={CANVAS_HEIGHT}
+          isFullscreen={isFullscreen}
+          onFrame={drawReady}
+        />
+
+        <div className="ready-panel">
+          <p className="stat-line--muted">
+            Get your camera set up and check your hand shows up above. The match starts as soon as
+            both players hit ready.
+          </p>
+          <div className="ready-status-row">
+            <span className={`ready-pill${iAmReady ? ' is-ready' : ''}`}>
+              You: {iAmReady ? 'Ready ✅' : 'Not Ready'}
+            </span>
+            <span className={`ready-pill${opponentReady ? ' is-ready' : ''}`}>
+              Opponent: {opponentReady ? 'Ready ✅' : 'Waiting…'}
+            </span>
+          </div>
+          <div className="ghost-btn-row">
+            <button className="ghost-btn" onClick={() => setReady(mySide, !iAmReady)}>
+              {iAmReady ? 'Cancel Ready' : "I'm Ready"}
+            </button>
+            <button className="ghost-btn" onClick={handleLeave}>Leave Game</button>
+          </div>
+          <div className="invite-box">
+            <code className="invite-link">{inviteLink}</code>
+          </div>
+        </div>
+      </div>
     );
   }
 
