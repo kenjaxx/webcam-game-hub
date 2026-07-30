@@ -51,8 +51,10 @@ export function useHandTracking(videoRef) {
       hands.setOptions({
         maxNumHands: 1,
         modelComplexity: 0,
-        minDetectionConfidence: 0.6,
-        minTrackingConfidence: 0.5,
+        // Slightly looser thresholds so the model locks on faster and drops
+        // out less often — trades a little precision for responsiveness.
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.4,
       });
 
       hands.onResults((results) => {
@@ -62,7 +64,10 @@ export function useHandTracking(videoRef) {
     const thumbTip = landmarks[4];
     const distance = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
     const isPinching = distance < 0.05;
-    const smoothingFactor = 0.35;
+    // Higher smoothing factor = less lag behind the raw landmark position.
+    // This used to be 0.35, which (combined with a second smoothing pass in
+    // the games themselves) made the cursor visibly trail your hand.
+    const smoothingFactor = 0.55;
 
     if (isFirstDetection.current) {
       smoothedPos.current.x = indexTip.x;
@@ -118,4 +123,3 @@ export function useHandTracking(videoRef) {
 
   return { handDataRef, handDetected };
 }
-

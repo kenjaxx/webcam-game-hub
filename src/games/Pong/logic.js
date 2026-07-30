@@ -11,6 +11,14 @@ export const AI_X = CANVAS_WIDTH - 24 - PADDLE_WIDTH; // left edge of the AI's p
 export const STARTING_LIVES = 5;
 export const MAX_BALL_SPEED = 11;
 
+// How long the ball stays parked at center court after a point, before play
+// resumes. Paddles can still move during this window so both players have a
+// moment to reposition/get ready.
+export const SERVE_PAUSE_MS = 3000;
+
+// Paddle speed (px per dt-unit, ~60fps frame) when controlled via keyboard.
+export const KEYBOARD_PADDLE_SPEED = 7;
+
 export const DIFFICULTY_SETTINGS = {
   easy: { ballSpeed: 4.2, aiSpeed: 3.0, aiReaction: 0.65, label: 'Easy' },
   medium: { ballSpeed: 5.2, aiSpeed: 4.1, aiReaction: 0.82, label: 'Medium' },
