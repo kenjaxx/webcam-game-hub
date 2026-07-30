@@ -73,4 +73,4 @@
 @media (prefers-reduced-motion: reduce) {
   .waiting-dots::after { animation: none; }
   .ready-pill { transition: none; }
-}
+}  
