@@ -58,14 +58,11 @@ export default function PongOnline({ onExit, initialRoomId }) {
   const prevStatusRef = useRef(null);
   const roundStartTimeRef = useRef(0);
 
-  // Host-only running totals — kept in refs so a point can be resolved and
-  // written in one go without waiting on a React state round-trip.
   const hostScoreRef = useRef(0);
   const guestScoreRef = useRef(0);
   const hostLivesRef = useRef(STARTING_LIVES);
   const guestLivesRef = useRef(STARTING_LIVES);
 
-  // Auto-join if we arrived via an invite link.
   useEffect(() => {
     if (initialRoomId && !roomId && !autoJoinAttemptedRef.current) {
       autoJoinAttemptedRef.current = true;
@@ -73,7 +70,6 @@ export default function PongOnline({ onExit, initialRoomId }) {
     }
   }, [initialRoomId, roomId, joinRoom]);
 
-  // Kick off a local 3-2-1 countdown the moment the room enters 'countdown'.
   useEffect(() => {
     if (room?.status === 'countdown' && prevStatusRef.current !== 'countdown') {
       setCountdown(3);
@@ -81,7 +77,6 @@ export default function PongOnline({ onExit, initialRoomId }) {
     prevStatusRef.current = room?.status;
   }, [room?.status, setCountdown]);
 
-  // Host: once its local countdown finishes, spin up the ball and flip the room to 'playing'.
   useEffect(() => {
     if (role === 'host' && room?.status === 'countdown' && countdown === null && !startedRef.current) {
       startedRef.current = true;
@@ -114,7 +109,6 @@ export default function PongOnline({ onExit, initialRoomId }) {
     }
   }
 
-  // Host-only: resolves a point, ends the match if someone's out of lives.
   function handlePoint(scorer) {
     const settings = DIFFICULTY_SETTINGS[room.difficulty];
 
@@ -188,7 +182,6 @@ export default function PongOnline({ onExit, initialRoomId }) {
     const isPlaying = room.status === 'playing';
     const opponentPaddleY = room[oppSide]?.paddleY ?? CANVAS_HEIGHT / 2;
 
-    // Only the host simulates physics; the guest just renders the synced ball.
     if (role === 'host' && isPlaying && ballRef.current && now >= servePauseUntil.current) {
       const prevBallX = ballRef.current.x;
       const prevBallY = ballRef.current.y;
@@ -311,9 +304,7 @@ export default function PongOnline({ onExit, initialRoomId }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       })
-      .catch(() => {
-        /* Clipboard API unavailable — link is still selectable/visible for manual copy. */
-      });
+      .catch(() => {});
   }
 
   function handleLeave() {
@@ -328,8 +319,6 @@ export default function PongOnline({ onExit, initialRoomId }) {
     startedRef.current = false;
     leaveRoom();
   }
-
-  // ---------- Render states ----------
 
   if (connectionError) {
     return (
@@ -416,7 +405,7 @@ export default function PongOnline({ onExit, initialRoomId }) {
           <code className="invite-link">{inviteLink}</code>
           <button className="ghost-btn" onClick={handleCopyLink}>{copied ? 'Copied!' : 'Copy Link'}</button>
         </div>
-        <p className="stat-line--muted waiting-dots">Waiting for player to join</p>
+        <p className="stat-line--muted">Waiting for player to join...</p>
         <div className="ghost-btn-row">
           <button className="ghost-btn" onClick={handleLeave}>Cancel</button>
         </div>
@@ -424,7 +413,6 @@ export default function PongOnline({ onExit, initialRoomId }) {
     );
   }
 
-  // status is 'countdown' or 'playing'
   const heartsFor = (side) => {
     const lives = room[side]?.lives ?? STARTING_LIVES;
     return `${'❤️'.repeat(lives)}${'🖤'.repeat(STARTING_LIVES - lives)}`;

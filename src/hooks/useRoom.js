@@ -4,7 +4,6 @@ import { db } from '../firebase';
 
 const ROOM_COLLECTION = 'pong_rooms';
 
-// Avoids visually ambiguous characters (0/O, 1/I) since people read these aloud/type them.
 function generateRoomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
@@ -14,9 +13,6 @@ function generateRoomCode() {
 
 const emptySide = () => ({ paddleY: 180, score: 0, lives: 5 });
 
-// Manages a single realtime 2-player Pong room stored in Firestore.
-// Each browser tab holds exactly one role for the room's lifetime:
-// 'host' (creates the room, runs authoritative physics) or 'guest' (joins via link).
 export function useRoom() {
   const [room, setRoom] = useState(null);
   const [roomId, setRoomId] = useState(null);
@@ -47,7 +43,7 @@ export function useRoom() {
   const createRoom = useCallback(async (difficulty) => {
     const id = generateRoomCode();
     await setDoc(doc(db, ROOM_COLLECTION, id), {
-      status: 'waiting', // waiting -> countdown -> playing -> gameover -> abandoned
+      status: 'waiting',
       difficulty,
       host: emptySide(),
       guest: null,
@@ -62,7 +58,6 @@ export function useRoom() {
     return id;
   }, [subscribe]);
 
-  // Transaction-guarded so two people opening the same link at once can't both become the guest.
   const joinRoom = useCallback(async (id) => {
     const ref = doc(db, ROOM_COLLECTION, id);
     try {
@@ -100,7 +95,6 @@ export function useRoom() {
     }).catch((err) => console.error('Paddle update failed:', err));
   }, [roomId]);
 
-  // Host-only: pushes authoritative ball position / score / lives / status.
   const updateGameState = useCallback((partial) => {
     if (!roomId) return;
     updateDoc(doc(db, ROOM_COLLECTION, roomId), {
