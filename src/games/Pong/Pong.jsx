@@ -5,9 +5,9 @@ import HandTrackedCanvas from '../../components/HandTrackedCanvas';
 import { useCountdown } from '../../hooks/useCountdown';
 import { useFullscreen } from '../../hooks/useFullscreen';
 import { useKeyboardControl } from '../../hooks/useKeyboardControl';
-import { logSession } from '../../hooks/useSessionStats';
 import Leaderboard from '../../components/Leaderboard';
 import { useLeaderboard } from '../../hooks/useLeaderboard';
+import { logSession } from '../../hooks/useSessionStats';
 import { THEME, drawArcadeBackground } from '../../shared/theme';
 import {
   CANVAS_WIDTH,
@@ -18,6 +18,7 @@ import {
   PLAYER_X,
   AI_X,
   STARTING_LIVES,
+  SERVE_PAUSE_MS,
   KEYBOARD_PADDLE_SPEED,
   DIFFICULTY_SETTINGS,
   createBall,
@@ -43,7 +44,6 @@ export default function Pong({ onExit }) {
   const [isFullscreen, toggleFullscreen] = useFullscreen(wrapperRef);
   const [countdown, setCountdown] = useCountdown();
   const keyboard = useKeyboardControl();
-  const { topScores, loading, submitScore } = useLeaderboard('pong');
 
   const [difficulty, setDifficulty] = useState(null);
   const [score, setScore] = useState(0);
@@ -53,43 +53,46 @@ export default function Pong({ onExit }) {
   const [handDetected, setHandDetected] = useState(false);
   const [keyboardActive, setKeyboardActive] = useState(false);
   const [muted, setMutedState] = useState(getMuted());
+  const [pointFlash, setPointFlash] = useState(null);
 
+  const ball = useRef(null);
   const playerPaddleY = useRef(CANVAS_HEIGHT / 2);
   const aiPaddleY = useRef(CANVAS_HEIGHT / 2);
-  const ballRef = useRef(null);
   const particles = useRef([]);
   const screenShake = useRef(0);
-  const servePauseUntil = useRef(0);
+  const gameActiveRef = useRef(false);
   const scoreRef = useRef(0);
   const livesRef = useRef(STARTING_LIVES);
   const hasEndedRef = useRef(false);
-  const gameActiveRef = useRef(false);
+  const servePauseUntil = useRef(0);
   const roundStartTimeRef = useRef(0);
+  const { topScores, loading, submitScore } = useLeaderboard('pong');
 
   const gameActive = difficulty && countdown === null && !gameOver;
   gameActiveRef.current = gameActive;
 
   function startNewRound(chosenDifficulty) {
     const settings = DIFFICULTY_SETTINGS[chosenDifficulty];
+    ball.current = createBall(settings.ballSpeed);
     playerPaddleY.current = CANVAS_HEIGHT / 2;
     aiPaddleY.current = CANVAS_HEIGHT / 2;
-    ballRef.current = createBall(settings.ballSpeed);
     particles.current = [];
     screenShake.current = 0;
-    servePauseUntil.current = Date.now() + 500;
     scoreRef.current = 0;
     livesRef.current = STARTING_LIVES;
     hasEndedRef.current = false;
+    servePauseUntil.current = 0;
     roundStartTimeRef.current = Date.now();
     setScore(0);
     setLives(STARTING_LIVES);
     setGameOver(false);
     setIsNewHighScore(false);
+    setPointFlash(null);
     setDifficulty(chosenDifficulty);
     setCountdown(3);
   }
 
-  function spawnParticles(x, y, color, count = 10) {
+  function spawnParticles(x, y, color, count = 14) {
     for (let i = 0; i < count; i++) {
       const angle = (Math.PI * 2 * i) / count;
       particles.current.push({
@@ -110,85 +113,99 @@ export default function Pong({ onExit }) {
     setGameOver(true);
     const isNew = saveHighScoreIfBetter(difficulty, scoreRef.current);
     setIsNewHighScore(isNew);
+    endGameStatsLog(roundStartTimeRef.current);
+  }
+
+  function endGameStatsLog(roundStartTime) {
     logSession('pong', {
       score: scoreRef.current,
       difficulty,
       accuracy: null,
-      durationSec: Math.round((Date.now() - roundStartTimeRef.current) / 1000),
+      durationSec: Math.round((Date.now() - roundStartTime) / 1000),
     });
+  }
+
+  function handlePoint(scorer) {
+    const settings = DIFFICULTY_SETTINGS[difficulty];
+
+    if (scorer === 'player') {
+      scoreRef.current += 1;
+      setScore(scoreRef.current);
+      playScoreSound();
+      spawnParticles(CANVAS_WIDTH - BALL_RADIUS - 4, ball.current.y, 'rgba(77, 208, 165, ALPHA)');
+    } else {
+      livesRef.current = Math.max(0, livesRef.current - 1);
+      setLives(livesRef.current);
+      playMissSound();
+      screenShake.current = 10;
+      spawnParticles(BALL_RADIUS + 4, ball.current.y, 'rgba(255, 107, 107, ALPHA)');
+    }
+
+    setPointFlash(scorer);
+    setTimeout(() => setPointFlash(null), 500);
+
+    if (scorer === 'ai' && livesRef.current <= 0) {
+      endGame();
+      return;
+    }
+
+    ball.current = createBall(settings.ballSpeed, scorer === 'player' ? false : true);
+    // Give both sides a moment to reposition before the next serve, instead
+    // of the ball instantly relaunching.
+    servePauseUntil.current = Date.now() + SERVE_PAUSE_MS;
   }
 
   function draw(handData, deltaMs) {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || !ball.current) return;
     const ctx = canvas.getContext('2d');
     setHandDetected(!!handData);
 
     const dt = Math.min(deltaMs / 16.67, 3);
     const now = Date.now();
 
-    // Keyboard takes priority over hand tracking whenever it's actively in use.
+    // Keyboard takes priority whenever it's actively being used; otherwise
+    // fall back to hand tracking. Paddle movement stays live even during the
+    // post-point serve pause, so players can reposition before the ball drops.
     const usingKeyboard = keyboard.isActive();
     setKeyboardActive(usingKeyboard);
 
-    if (gameActiveRef.current && !hasEndedRef.current) {
-      if (usingKeyboard) {
-        playerPaddleY.current += keyboard.directionRef.current * KEYBOARD_PADDLE_SPEED * dt;
-        playerPaddleY.current = clampPaddleY(playerPaddleY.current);
-      } else if (handData) {
-        const targetY = handData.y * CANVAS_HEIGHT;
-        playerPaddleY.current += (targetY - playerPaddleY.current) * 0.45;
-        playerPaddleY.current = clampPaddleY(playerPaddleY.current);
+    if (usingKeyboard) {
+      playerPaddleY.current += keyboard.directionRef.current * KEYBOARD_PADDLE_SPEED * dt;
+      playerPaddleY.current = clampPaddleY(playerPaddleY.current);
+    } else if (handData) {
+      const targetY = handData.y * CANVAS_HEIGHT;
+      playerPaddleY.current += (targetY - playerPaddleY.current) * 0.45;
+      playerPaddleY.current = clampPaddleY(playerPaddleY.current);
+    }
+
+    if (gameActiveRef.current && !hasEndedRef.current && now >= servePauseUntil.current) {
+      const settings = DIFFICULTY_SETTINGS[difficulty];
+
+      aiPaddleY.current = updateAIPaddle(aiPaddleY.current, ball.current, settings, dt);
+
+      const prevBallX = ball.current.x;
+      const prevBallY = ball.current.y;
+
+      const wallHit = updateBallPhysics(ball.current, dt);
+      if (wallHit) playWallBounceSound();
+
+      const hitPlayer = checkPaddleCollision(ball.current, prevBallX, prevBallY, playerPaddleY.current, PLAYER_X, true);
+      if (hitPlayer) {
+        playPaddleHitSound();
+        spawnParticles(ball.current.x, ball.current.y, 'rgba(255,255,255,ALPHA)', 8);
       }
 
-      const settings = DIFFICULTY_SETTINGS[difficulty];
-      aiPaddleY.current = updateAIPaddle(aiPaddleY.current, ballRef.current, settings, dt);
+      const hitAI = checkPaddleCollision(ball.current, prevBallX, prevBallY, aiPaddleY.current, AI_X, false);
+      if (hitAI) {
+        playPaddleHitSound();
+        spawnParticles(ball.current.x, ball.current.y, 'rgba(255,255,255,ALPHA)', 8);
+      }
 
-      if (now >= servePauseUntil.current) {
-        const prevBallX = ballRef.current.x;
-        const prevBallY = ballRef.current.y;
-
-        const wallHit = updateBallPhysics(ballRef.current, dt);
-        if (wallHit) playWallBounceSound();
-
-        const hitPlayer = checkPaddleCollision(
-          ballRef.current, prevBallX, prevBallY, playerPaddleY.current, PLAYER_X, true
-        );
-        if (hitPlayer) {
-          playPaddleHitSound();
-          spawnParticles(ballRef.current.x, ballRef.current.y, 'rgba(255,255,255,ALPHA)', 8);
-        }
-
-        const hitAI = checkPaddleCollision(
-          ballRef.current, prevBallX, prevBallY, aiPaddleY.current, AI_X, false
-        );
-        if (hitAI) {
-          playPaddleHitSound();
-          spawnParticles(ballRef.current.x, ballRef.current.y, 'rgba(255,255,255,ALPHA)', 8);
-        }
-
-        if (ballRef.current.x - BALL_RADIUS > CANVAS_WIDTH) {
-          // Player scored past the AI
-          scoreRef.current += 1;
-          setScore(scoreRef.current);
-          playScoreSound();
-          spawnParticles(CANVAS_WIDTH - BALL_RADIUS - 4, ballRef.current.y, 'rgba(77, 208, 165, ALPHA)');
-          ballRef.current = createBall(settings.ballSpeed, true);
-          servePauseUntil.current = now + 500;
-        } else if (ballRef.current.x + BALL_RADIUS < 0) {
-          // Player missed
-          livesRef.current = Math.max(0, livesRef.current - 1);
-          setLives(livesRef.current);
-          playMissSound();
-          screenShake.current = 10;
-          spawnParticles(BALL_RADIUS + 4, ballRef.current.y, 'rgba(255, 107, 107, ALPHA)');
-          if (livesRef.current <= 0) {
-            endGame();
-          } else {
-            ballRef.current = createBall(settings.ballSpeed, false);
-            servePauseUntil.current = now + 500;
-          }
-        }
+      if (ball.current.x + BALL_RADIUS < 0) {
+        handlePoint('ai');
+      } else if (ball.current.x - BALL_RADIUS > CANVAS_WIDTH) {
+        handlePoint('player');
       }
     }
 
@@ -216,9 +233,9 @@ export default function Pong({ onExit }) {
     ctx.fillStyle = THEME.danger;
     ctx.fillRect(AI_X, aiPaddleY.current - PADDLE_HEIGHT / 2, PADDLE_WIDTH, PADDLE_HEIGHT);
 
-    if (ballRef.current && (gameActiveRef.current || countdown !== null)) {
+    if (now >= servePauseUntil.current || countdown !== null) {
       ctx.beginPath();
-      ctx.arc(ballRef.current.x, ballRef.current.y, BALL_RADIUS, 0, Math.PI * 2);
+      ctx.arc(ball.current.x, ball.current.y, BALL_RADIUS, 0, Math.PI * 2);
       ctx.fillStyle = THEME.gold;
       ctx.fill();
     }
@@ -233,6 +250,22 @@ export default function Pong({ onExit }) {
       ctx.fillRect(px - 3, py - 3, 6, 6);
       return true;
     });
+
+    if (pointFlash) {
+      ctx.fillStyle = pointFlash === 'player' ? 'rgba(77, 208, 165, 0.15)' : 'rgba(255, 107, 107, 0.15)';
+      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    }
+
+    // Post-point "get ready" readout — ball is parked, paddles are still
+    // movable, this just tells players how long they have before it drops.
+    if (gameActiveRef.current && countdown === null && now < servePauseUntil.current) {
+      const secondsLeft = Math.max(1, Math.ceil((servePauseUntil.current - now) / 1000));
+      ctx.fillStyle = THEME.text;
+      ctx.font = `bold 22px ${THEME.fontHeading}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`Get Ready: ${secondsLeft}`, CANVAS_WIDTH / 2, 30);
+    }
 
     if (countdown !== null) {
       ctx.fillStyle = 'rgba(7,5,13,0.7)';
@@ -257,7 +290,8 @@ export default function Pong({ onExit }) {
     return (
       <ArcadeScreen eyebrow="Select Difficulty" title="Pong 🏓">
         <p className="stat-line--muted">
-          Move your hand up/down to control your paddle — or just use the ↑ / ↓ arrow keys.
+          Move your hand up/down to control your paddle — or use the ↑ / ↓ arrow keys (W/S also work).
+          You have 5 lives — rack up points before the AI wins them all!
         </p>
         <div className="difficulty-grid">
           {Object.entries(DIFFICULTY_SETTINGS).map(([key, setting]) => (
