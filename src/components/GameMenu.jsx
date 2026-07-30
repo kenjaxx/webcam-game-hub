@@ -4,48 +4,18 @@ import { getHighScore as getFruitHighScore } from '../games/FruitNinja/storage';
 import { getHighScore as getPongHighScore } from '../games/Pong/storage';
 import './GameMenu.css';
 
-// Reads best score across all difficulties for a given game's storage module
 function getBestScore(getHighScoreFn) {
   return Math.max(getHighScoreFn('easy'), getHighScoreFn('medium'), getHighScoreFn('hard'));
 }
 
 export default function GameMenu({ onSelectGame }) {
   const games = [
-    {
-      id: 'whackamole',
-      name: 'Whack-a-Mole',
-      emoji: '🔨',
-      ready: true,
-      best: getBestScore(getWhackHighScore),
-    },
-    {
-      id: 'flappybird',
-      name: 'Flappy Bird',
-      emoji: '🐦',
-      ready: true,
-      best: getBestScore(getFlappyHighScore),
-    },
-    {
-      id: 'fruitninja',
-      name: 'Fruit Ninja',
-      emoji: '🍉',
-      ready: true,
-      best: getBestScore(getFruitHighScore),
-    },
-    {
-      id: 'pong',
-      name: 'Pong',
-      emoji: '🏓',
-      ready: true,
-      best: getBestScore(getPongHighScore),
-    },
-    {
-      id: 'mystery',
-      name: 'New Cartridge',
-      emoji: '❓',
-      ready: false,
-      best: 0,
-    },
+    { id: 'whackamole', name: 'Whack-a-Mole', emoji: '🔨', ready: true, best: getBestScore(getWhackHighScore) },
+    { id: 'flappybird', name: 'Flappy Bird', emoji: '🐦', ready: true, best: getBestScore(getFlappyHighScore) },
+    { id: 'fruitninja', name: 'Fruit Ninja', emoji: '🍉', ready: true, best: getBestScore(getFruitHighScore) },
+    { id: 'pong', name: 'Pong', emoji: '🏓', ready: true, best: getBestScore(getPongHighScore) },
+    { id: 'pongonline', name: 'Pong Online', emoji: '🌐', ready: true, multiplayer: true },
+    { id: 'mystery', name: 'New Cartridge', emoji: '❓', ready: false, best: 0 },
   ];
 
   return (
@@ -58,11 +28,7 @@ export default function GameMenu({ onSelectGame }) {
 
       <div className="arcade__marquee" aria-hidden="true">
         {Array.from({ length: 13 }).map((_, i) => (
-          <span
-            key={i}
-            className="arcade__bulb"
-            style={{ animationDelay: `${i * 0.12}s` }}
-          />
+          <span key={i} className="arcade__bulb" style={{ animationDelay: `${i * 0.12}s` }} />
         ))}
       </div>
 
@@ -88,7 +54,7 @@ export default function GameMenu({ onSelectGame }) {
             <span className="cartridge__name">{game.name}</span>
             <span className="cartridge__footer">
               <span className="cartridge__best">
-                {game.ready ? `Best ${game.best}` : '· · ·'}
+                {!game.ready ? '· · ·' : game.multiplayer ? '2-Player · Invite Link' : `Best ${game.best}`}
               </span>
               <span className={`cartridge__status ${game.ready ? 'is-ready' : 'is-locked'}`}>
                 {game.ready ? 'Ready' : 'Coming Soon'}

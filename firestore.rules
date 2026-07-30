@@ -1,0 +1,20 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Matches any top-level collection whose name starts with "leaderboard_"
+    // (e.g. leaderboard_whackamole, leaderboard_pong, etc.)
+    match /{collection}/{docId} {
+      allow read: if collection.matches('^leaderboard_.*$');
+      allow create: if collection.matches('^leaderboard_.*$');
+      allow update, delete: if false;
+    }
+
+    match /pong_rooms/{roomId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if true;
+      allow delete: if false;
+    }
+  }
+}

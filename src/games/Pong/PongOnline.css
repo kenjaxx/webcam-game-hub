@@ -1,0 +1,40 @@
+.invite-box {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid rgba(180, 91, 255, 0.35);
+  border-radius: 12px;
+  background: rgba(180, 91, 255, 0.07);
+  max-width: 100%;
+}
+
+.invite-link {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: #35e6ff;
+  word-break: break-all;
+  text-align: left;
+}
+
+.waiting-dots::after {
+  content: '...';
+  display: inline-block;
+  width: 1.2em;
+  text-align: left;
+  animation: waitingDots 1.4s steps(4, end) infinite;
+}
+
+@keyframes waitingDots {
+  0% { content: ''; }
+  25% { content: '.'; }
+  50% { content: '..'; }
+  75% { content: '...'; }
+  100% { content: ''; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .waiting-dots::after { animation: none; }
+}
