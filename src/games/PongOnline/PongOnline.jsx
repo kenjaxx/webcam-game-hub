@@ -4,6 +4,7 @@ import GameHUD from '../../components/GameHUD';
 import HandTrackedCanvas from '../../components/HandTrackedCanvas';
 import { useCountdown } from '../../hooks/useCountdown';
 import { useFullscreen } from '../../hooks/useFullscreen';
+import { useKeyboardControl } from '../../hooks/useKeyboardControl';
 import { useRoom } from '../../hooks/useRoom';
 import { logSession } from '../../hooks/useSessionStats';
 import { THEME, drawArcadeBackground } from '../../shared/theme';
@@ -16,6 +17,8 @@ import {
   PLAYER_X,
   AI_X as GUEST_X,
   STARTING_LIVES,
+  SERVE_PAUSE_MS,
+  KEYBOARD_PADDLE_SPEED,
   DIFFICULTY_SETTINGS,
   createBall,
   updateBallPhysics,
@@ -38,8 +41,10 @@ export default function PongOnline({ onExit, initialRoomId }) {
   const wrapperRef = useRef(null);
   const [isFullscreen, toggleFullscreen] = useFullscreen(wrapperRef);
   const [countdown, setCountdown] = useCountdown();
+  const keyboard = useKeyboardControl();
   const [muted, setMutedState] = useState(getMuted());
   const [handDetected, setHandDetected] = useState(false);
+  const [keyboardActive, setKeyboardActive] = useState(false);
   const [pointFlash, setPointFlash] = useState(null);
   const [copied, setCopied] = useState(false);
 
@@ -70,6 +75,14 @@ export default function PongOnline({ onExit, initialRoomId }) {
   const readyTransitionRef = useRef(false);
   const prevStatusRef = useRef(null);
   const roundStartTimeRef = useRef(0);
+
+  // Drives the "Get Ready: N" readout shown to BOTH players after a point.
+  // The host also drives actual ball-physics gating via `servePauseUntil`
+  // (set immediately, no round trip needed); this ref is what everyone's
+  // canvas reads to draw the countdown, kept in sync via the score watch
+  // below for the guest (and set directly by the host for zero-lag display).
+  const displayServeUntilRef = useRef(0);
+  const prevTotalScoreRef = useRef(0);
 
   const hostScoreRef = useRef(0);
   const guestScoreRef = useRef(0);
@@ -115,11 +128,13 @@ export default function PongOnline({ onExit, initialRoomId }) {
   }, [room?.status, setCountdown]);
 
   // Every time we land back on the ready screen (fresh room OR a rematch),
-  // clear the "already started this round" guard so the next countdown can
-  // spawn a fresh ball again.
+  // clear the "already started this round" guard, and reset the serve-pause
+  // trackers so a leftover countdown from the last match doesn't flash up.
   useEffect(() => {
     if (room?.status === 'ready') {
       startedRef.current = false;
+      prevTotalScoreRef.current = 0;
+      displayServeUntilRef.current = 0;
     }
   }, [room?.status]);
 
@@ -193,7 +208,13 @@ export default function PongOnline({ onExit, initialRoomId }) {
     }
 
     ballRef.current = createBall(settings.ballSpeed, scorer !== 'host');
-    servePauseUntil.current = Date.now() + 500;
+    const pauseUntil = Date.now() + SERVE_PAUSE_MS;
+    servePauseUntil.current = pauseUntil;
+    // Host sets its own display countdown immediately (no need to wait for
+    // the round trip through Firestore) and pre-marks the score total so the
+    // score-watch effect below doesn't double-trigger once the write echoes back.
+    displayServeUntilRef.current = pauseUntil;
+    prevTotalScoreRef.current = hostScoreRef.current + guestScoreRef.current;
 
     updateGameState({
       'host.score': hostScoreRef.current,
@@ -217,7 +238,7 @@ export default function PongOnline({ onExit, initialRoomId }) {
     ctx.font = `bold 18px ${THEME.fontHeading}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('Move your hand to test tracking', CANVAS_WIDTH / 2, 26);
+    ctx.fillText('Move your hand to test tracking (or just use ↑ / ↓)', CANVAS_WIDTH / 2, 26);
 
     if (handData) {
       const cursorX = (1 - handData.x) * CANVAS_WIDTH;
@@ -241,9 +262,16 @@ export default function PongOnline({ onExit, initialRoomId }) {
     const dt = Math.min(deltaMs / 16.67, 3);
     const now = Date.now();
 
-    if (handData) {
+    // Keyboard takes priority over hand tracking whenever it's actively in use.
+    const usingKeyboard = keyboard.isActive();
+    setKeyboardActive(usingKeyboard);
+
+    if (usingKeyboard) {
+      localPaddleY.current += keyboard.directionRef.current * KEYBOARD_PADDLE_SPEED * dt;
+      localPaddleY.current = clampPaddleY(localPaddleY.current);
+    } else if (handData) {
       const targetY = handData.y * CANVAS_HEIGHT;
-      localPaddleY.current += (targetY - localPaddleY.current) * 0.35;
+      localPaddleY.current += (targetY - localPaddleY.current) * 0.45;
       localPaddleY.current = clampPaddleY(localPaddleY.current);
     }
     if (now - lastPaddleSyncRef.current > 80) {
@@ -253,6 +281,19 @@ export default function PongOnline({ onExit, initialRoomId }) {
 
     const isPlaying = room.status === 'playing';
     const opponentPaddleY = room[oppSide]?.paddleY ?? CANVAS_HEIGHT / 2;
+
+    // Guest doesn't run handlePoint, so it detects a scored point purely from
+    // the synced score total changing, and starts its own local "get ready"
+    // countdown display from that moment.
+    if (isPlaying) {
+      const totalScore = (room.host?.score ?? 0) + (room.guest?.score ?? 0);
+      if (totalScore !== prevTotalScoreRef.current) {
+        prevTotalScoreRef.current = totalScore;
+        if (totalScore > 0) {
+          displayServeUntilRef.current = now + SERVE_PAUSE_MS;
+        }
+      }
+    }
 
     if (role === 'host' && isPlaying && ballRef.current && now >= servePauseUntil.current) {
       const prevBallX = ballRef.current.x;
@@ -344,6 +385,17 @@ export default function PongOnline({ onExit, initialRoomId }) {
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     }
 
+    // Shown to BOTH players — ball is parked at center, paddles still respond,
+    // this is just the "heads up, play resumes in N" readout.
+    if (isPlaying && countdown === null && now < displayServeUntilRef.current) {
+      const secondsLeft = Math.max(1, Math.ceil((displayServeUntilRef.current - now) / 1000));
+      ctx.fillStyle = THEME.text;
+      ctx.font = `bold 22px ${THEME.fontHeading}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`Get Ready: ${secondsLeft}`, CANVAS_WIDTH / 2, 30);
+    }
+
     if (countdown !== null) {
       ctx.fillStyle = 'rgba(7,5,13,0.7)';
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -417,7 +469,7 @@ export default function PongOnline({ onExit, initialRoomId }) {
       <ArcadeScreen eyebrow="2 Player · Online" title="Pong Online 🏓🌐">
         <p className="stat-line--muted">
           Create a game and send the invite link to a friend on another device. You'll each use your own
-          webcam to control your paddle.
+          webcam, or the ↑ / ↓ arrow keys, to control your paddle.
         </p>
         <div className="difficulty-grid">
           {Object.entries(DIFFICULTY_SETTINGS).map(([key, setting]) => (
@@ -497,7 +549,11 @@ export default function PongOnline({ onExit, initialRoomId }) {
           onToggleMute={toggleMute}
           onToggleFullscreen={toggleFullscreen}
           stats={`Difficulty: ${DIFFICULTY_SETTINGS[room.difficulty]?.label ?? room.difficulty}`}
-          warning={!handDetected ? 'Hand not detected — move your hand into frame, with good lighting' : null}
+          warning={
+            !handDetected && !keyboardActive
+              ? 'Hand not detected — move your hand into frame, with good lighting (or use ↑ / ↓ arrow keys)'
+              : null
+          }
         />
 
         <HandTrackedCanvas
@@ -510,8 +566,8 @@ export default function PongOnline({ onExit, initialRoomId }) {
 
         <div className="ready-panel">
           <p className="stat-line--muted">
-            Get your camera set up and check your hand shows up above. The match starts as soon as
-            both players hit ready.
+            Get your camera set up (or just have your arrow keys ready) and check your hand shows up
+            above. The match starts as soon as both players hit ready.
           </p>
           <div className="ready-status-row">
             <span className={`ready-pill${iAmReady ? ' is-ready' : ''}`}>
@@ -549,7 +605,11 @@ export default function PongOnline({ onExit, initialRoomId }) {
         onToggleMute={toggleMute}
         onToggleFullscreen={toggleFullscreen}
         stats={`You: ${room[mySide]?.score ?? 0} ${heartsFor(mySide)}  ·  Opponent: ${room[oppSide]?.score ?? 0} ${heartsFor(oppSide)}`}
-        warning={!handDetected ? 'Hand not detected — move your hand into frame, with good lighting' : null}
+        warning={
+          !handDetected && !keyboardActive
+            ? 'Hand not detected — move your hand into frame, with good lighting (or use ↑ / ↓ arrow keys)'
+            : null
+        }
       />
 
       <HandTrackedCanvas
