@@ -47,6 +47,13 @@ export default function PongOnline({ onExit, initialRoomId }) {
   const [keyboardActive, setKeyboardActive] = useState(false);
   const [pointFlash, setPointFlash] = useState(null);
   const [copied, setCopied] = useState(false);
+  // Joining is now an explicit user action (button press) instead of an
+  // automatic side effect of loading the invite URL. Auto-joining on page
+  // load meant a refresh, a duplicate tab, or even a link-preview crawler
+  // fetching the URL could silently consume the one guest slot before the
+  // real friend ever clicked anything — which is what produced the
+  // "this game already has two players" error on freshly-generated links.
+  const [joining, setJoining] = useState(false);
 
   const {
     room,
@@ -64,13 +71,16 @@ export default function PongOnline({ onExit, initialRoomId }) {
   } = useRoom();
 
   const localPaddleY = useRef(CANVAS_HEIGHT / 2);
+  // Separate paddle position for the pre-match "ready" screen, so arrow-key
+  // presses there have an immediate, visible response instead of doing
+  // nothing (which is what made it look like the keys weren't working).
+  const readyPaddleY = useRef(CANVAS_HEIGHT / 2);
   const ballRef = useRef(null);
   const particles = useRef([]);
   const screenShake = useRef(0);
   const servePauseUntil = useRef(0);
   const lastPaddleSyncRef = useRef(0);
   const lastBallSyncRef = useRef(0);
-  const autoJoinAttemptedRef = useRef(false);
   const startedRef = useRef(false);
   const readyTransitionRef = useRef(false);
   const prevStatusRef = useRef(null);
@@ -93,13 +103,6 @@ export default function PongOnline({ onExit, initialRoomId }) {
   const oppSide = role === 'host' ? 'guest' : 'host';
   const iAmReady = !!room?.[mySide]?.ready;
   const opponentReady = !!room?.[oppSide]?.ready;
-
-  useEffect(() => {
-    if (initialRoomId && !roomId && !autoJoinAttemptedRef.current) {
-      autoJoinAttemptedRef.current = true;
-      joinRoom(initialRoomId);
-    }
-  }, [initialRoomId, roomId, joinRoom]);
 
   // Once both players hit "Ready", the host (single writer) advances the
   // room into the 3-2-1 countdown. Guarded by a ref so it only fires once
@@ -224,13 +227,27 @@ export default function PongOnline({ onExit, initialRoomId }) {
     });
   }
 
-  // Lightweight camera preview shown on the ready screen — just confirms hand
-  // tracking is working before the match starts, no gameplay logic involved.
-  function drawReady(handData) {
+  // Lightweight camera + keyboard preview shown on the ready screen — just
+  // confirms hand tracking AND arrow-key input are both working before the
+  // match starts. No gameplay/scoring logic involved, just visual feedback.
+  function drawReady(handData, deltaMs) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     setHandDetected(!!handData);
+
+    const dt = Math.min((deltaMs ?? 16.67) / 16.67, 3);
+
+    // This previously did nothing with keyboard input at all — the ready
+    // screen told players to "use ↑ / ↓" but had no code reading those keys,
+    // so nothing ever happened when they pressed them. Now it moves a real
+    // paddle and updates keyboardActive, same as the actual gameplay screen.
+    const usingKeyboard = keyboard.isActive();
+    setKeyboardActive(usingKeyboard);
+    if (usingKeyboard) {
+      readyPaddleY.current += keyboard.directionRef.current * KEYBOARD_PADDLE_SPEED * dt;
+      readyPaddleY.current = clampPaddleY(readyPaddleY.current);
+    }
 
     drawArcadeBackground(ctx, CANVAS_WIDTH, CANVAS_HEIGHT);
 
@@ -239,6 +256,11 @@ export default function PongOnline({ onExit, initialRoomId }) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('Move your hand to test tracking (or just use ↑ / ↓)', CANVAS_WIDTH / 2, 26);
+
+    // Visible paddle driven by the keyboard so arrow-key presses are
+    // immediately obvious, exactly like they will be once the match starts.
+    ctx.fillStyle = THEME.success;
+    ctx.fillRect(PLAYER_X, readyPaddleY.current - PADDLE_HEIGHT / 2, PADDLE_WIDTH, PADDLE_HEIGHT);
 
     if (handData) {
       const cursorX = (1 - handData.x) * CANVAS_WIDTH;
@@ -420,6 +442,15 @@ export default function PongOnline({ onExit, initialRoomId }) {
     createRoom(difficulty);
   }
 
+  // Join is now triggered only by an explicit click, never automatically on
+  // page load — see the comment on `joining` state above for why.
+  async function handleJoinClick() {
+    if (!initialRoomId || joining) return;
+    setJoining(true);
+    await joinRoom(initialRoomId);
+    setJoining(false);
+  }
+
   function handleCopyLink() {
     const inviteLink = `${window.location.origin}${window.location.pathname}?game=pongonline&room=${roomId}`;
     navigator.clipboard
@@ -449,6 +480,10 @@ export default function PongOnline({ onExit, initialRoomId }) {
     return (
       <ArcadeScreen eyebrow="Connection Problem" title="Pong Online 🏓🌐">
         <p className="stat-line">{connectionError}</p>
+        <p className="stat-line--muted">
+          If this link was already used to join a match, ask your friend to create a brand-new game and
+          send you the fresh link it generates.
+        </p>
         <div className="ghost-btn-row">
           <button className="ghost-btn" onClick={onExit}>Back to Menu</button>
         </div>
@@ -456,10 +491,20 @@ export default function PongOnline({ onExit, initialRoomId }) {
     );
   }
 
+  // Invite link was opened but nobody has clicked "Join" yet — joining only
+  // happens on explicit confirmation now, not just from loading this screen.
   if (initialRoomId && !roomId) {
     return (
-      <ArcadeScreen eyebrow="Joining Game" title="Pong Online 🏓🌐">
-        <p className="stat-line--muted">Connecting to your friend's game…</p>
+      <ArcadeScreen eyebrow="You've Been Invited" title="Pong Online 🏓🌐">
+        <p className="stat-line--muted">
+          A friend invited you to a Pong Online match. Hit Join when you're ready to hop in.
+        </p>
+        <div className="ghost-btn-row">
+          <button className="ghost-btn" onClick={handleJoinClick} disabled={joining}>
+            {joining ? 'Joining…' : 'Join Game'}
+          </button>
+          <button className="ghost-btn" onClick={onExit}>← Back to Menu</button>
+        </div>
       </ArcadeScreen>
     );
   }
@@ -566,8 +611,8 @@ export default function PongOnline({ onExit, initialRoomId }) {
 
         <div className="ready-panel">
           <p className="stat-line--muted">
-            Get your camera set up (or just have your arrow keys ready) and check your hand shows up
-            above. The match starts as soon as both players hit ready.
+            Get your camera set up (or just have your arrow keys ready) and check your hand — or the green
+            paddle above — responds. The match starts as soon as both players hit ready.
           </p>
           <div className="ready-status-row">
             <span className={`ready-pill${iAmReady ? ' is-ready' : ''}`}>
